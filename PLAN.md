@@ -14,8 +14,9 @@ underlying data, so that scripts and habits from Linux work unchanged.
 
 - Language: Rust, in a Cargo workspace.
 - Licence: GPL-3.0-or-later. procps-ng is GPL-2.0-or-later (its library is
-  LGPL-2.1-or-later), so its code can be translated into this project. Task 0.2
-  checks the per-file licence headers before any code is ported.
+  LGPL-2.1-or-later), so its code can be translated into this project. Before
+  any code is ported, its file's licence header is checked, as `AGENTS.md`
+  describes.
 - Target: macOS 27 on arm64. Other macOS versions and architectures are out of
   scope until someone needs them.
 - Installation: the binaries use the procps names (`ps`, `top`, `pgrep`,
@@ -332,16 +333,18 @@ without privileges, and whether `PROC_PIDTHREADID64INFO` and a full region walk
 succeed as root against platform binaries. Done when `docs/darwin-data.md`
 contains the results table for all of these calls.
 
-#### 0.2 Repository scaffolding
+#### 0.2 Repository scaffolding (done)
 
-Cargo workspace with the four crates, `LICENSE` (GPL-3.0-or-later), SPDX
-headers, strict clippy settings in `[workspace.lints]` (starting from
-`gifopt`'s, plus `undocumented_unsafe_blocks`), crane packages and checks in the
-flake, `clippy`, `test` and `doc` recipes in the justfile, `cargo-deny`
-configured to reject licences that are incompatible with GPL-3.0, and CI running
-format, lint and tests on macOS. The Nix flake, development shell, treefmt and
-git hooks already exist. Check the licence header of every procps-ng file before
-porting it; a GPL-2.0-only file cannot be ported.
+The Cargo workspace has the four crates, with strict lints in
+`[workspace.lints]`: `gifopt`'s clippy settings, plus `allow_attributes`,
+`allow_attributes_without_reason`, `undocumented_unsafe_blocks`, `missing_docs`,
+`unsafe_code` and `unsafe_op_in_unsafe_fn`. `clippy.toml` makes the `cargo`
+lints check the unpublished crates. The flake builds the workspace with crane
+and checks it with clippy, the tests, the documentation build, `cargo deny`,
+`cargo audit`, treefmt and `reuse lint`. The justfile has `build`, `clippy`,
+`test`, `doc`, `deny`, `audit`, `reuse`, `fmt` and `check` recipes. `cargo-deny`
+allows only licences that a dependency needs and that are compatible with
+GPL-3.0-or-later. CI runs the flake checks on macOS.
 
 #### 0.3 procps-ng reference harness
 
@@ -351,13 +354,18 @@ standard output, standard error and the exit status. A scenario starts processes
 with known attributes, runs commands, and masks volatile values such as pids and
 times. The same scenario runs on macOS against this project's binaries, and a
 test compares the two results. Done when one `pgrep` scenario and one `ps`
-scenario pass through the harness.
+scenario pass through the harness. crane's `cleanCargoSource` keeps only Rust
+sources and manifests, so the flake's source must be extended to include the
+golden files before the flake checks can run these tests.
 
 ### Phase 1: Darwin data layer (`darwin-proc`)
 
 #### 1.1 FFI additions
 
-Add the FFI declarations listed under Architecture, with size tests.
+Add the FFI declarations listed under Architecture, with size tests. The first
+`unsafe` code in `darwin-proc` comes with
+`#![expect(unsafe_code, reason = "...")]` at its root, because the workspace
+denies `unsafe_code` everywhere else.
 
 #### 1.2 Process enumeration and identity
 
@@ -617,7 +625,9 @@ summary of `docs/mappings.md`.
   messages, exit codes and output layout.
 - macOS integration tests start child processes with controlled attributes and
   inspect them with the real binaries. Tests that need root run under `sudo` in
-  CI; GitHub's macOS runners allow passwordless `sudo`.
+  CI; GitHub's macOS runners allow passwordless `sudo`. These tests need the
+  live process table, so CI runs them in a step of their own, outside
+  `nix flake check`.
 - Helper tests cover the protocol, the access policy with injected credentials,
   and the transport on a temporary socket.
 
