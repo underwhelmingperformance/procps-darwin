@@ -8,7 +8,7 @@ targets = ["aarch64-apple-darwin"]
 [licenses]
 # Add an SPDX identifier here when a dependency first needs it, and only if
 # its terms allow distribution as part of a GPL-3.0-or-later work.
-allow = ["GPL-3.0-or-later"]
+allow = ["GPL-3.0-or-later", "MIT", "Unicode-3.0"]
 
 [bans]
 multiple-versions = "allow"

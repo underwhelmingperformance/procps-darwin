@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Writes the golden files under crates/procps-harness/golden by running the
+# reference scenarios against procps-ng in a Linux container. Arguments are
+# passed to `procps-harness generate`.
+#
+# The container's /nix is a named volume, so later runs reuse its store. Docker
+# fills a new volume from the image only once, so the volume's name includes
+# the image digest.
+#
+# The container needs CAP_SYS_ADMIN to bind-mount a file over
+# /proc/sys/kernel/pid_max, which Docker does not allow as a volume.
+
+set -euo pipefail
+
+digest="sha256:7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c"
+image="nixos/nix:2.35.2@${digest}"
+root=$(git rev-parse --show-toplevel)
+git_directory=$(git rev-parse --path-format=absolute --git-common-dir)
+
+# The paths keep their host locations because a worktree's .git file and the
+# common git directory refer to each other by absolute path.
+docker run --rm \
+	--platform linux/arm64 \
+	--cap-add SYS_ADMIN \
+	--volume "${root}:${root}" \
+	--volume "${git_directory}:${git_directory}" \
+	--volume "procps-darwin-nix-${digest#sha256:}:/nix" \
+	--workdir "${root}" \
+	"${image}" \
+	sh -c 'git config --global --add safe.directory "$PWD" &&
+		nix --extra-experimental-features "nix-command flakes" \
+			run .#apps.aarch64-linux.harness-generate -- "$@"' \
+	harness-generate "$@"

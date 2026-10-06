@@ -4,6 +4,11 @@ version = 1
 # its copyright. NONE records that, and CC0-1.0 waives any right that a
 # jurisdiction might still grant.
 [[annotations]]
-path = ["Cargo.lock", "flake.lock", "nix/wrapscallion/sources.json"]
+path = [
+  "Cargo.lock",
+  "crates/procps-harness/golden/**",
+  "flake.lock",
+  "nix/wrapscallion/sources.json",
+]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"

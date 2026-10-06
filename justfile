@@ -26,5 +26,9 @@ audit:
 reuse:
     reuse lint
 
+[positional-arguments]
+harness-generate *ARGS:
+    scripts/harness-generate "$@"
+
 check: clippy test doc deny audit reuse
     nix flake check

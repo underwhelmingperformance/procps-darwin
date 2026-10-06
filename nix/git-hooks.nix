@@ -17,8 +17,15 @@
       settings.hooks = {
         check-added-large-files.enable = true;
         check-yaml.enable = true;
-        end-of-file-fixer.enable = true;
-        trim-trailing-whitespace.enable = true;
+        # A golden file records a command's output byte for byte.
+        end-of-file-fixer = {
+          enable = true;
+          excludes = ["^crates/procps-harness/golden/"];
+        };
+        trim-trailing-whitespace = {
+          enable = true;
+          excludes = ["^crates/procps-harness/golden/"];
+        };
 
         wrapscallion = {
           enable = true;
