@@ -392,17 +392,20 @@ uids, are not masked yet; the first `ps` scenario with user columns needs that.
 
 ### Phase 1: Darwin data layer (`darwin-proc`)
 
-#### 1.1 FFI additions
+#### 1.1 FFI additions (done with 1.2)
 
-Add the FFI declarations listed under Architecture, with size tests. The first
-`unsafe` code in `darwin-proc` comes with
-`#![expect(unsafe_code, reason = "...")]` at its root, because the workspace
-denies `unsafe_code` everywhere else.
+The FFI declarations listed under Architecture are in `ffi.rs`, with tests that
+compare their sizes and field offsets with the SDK. Each task adds the
+declarations that it uses, so every declaration has a caller. The workspace
+denies `unsafe_code`, and `darwin-proc` opts out at its root.
 
-#### 1.2 Process enumeration and identity
+#### 1.2 Process enumeration and identity (done)
 
-Read all processes with one `KERN_PROC_ALL` sysctl, add `proc_pidpath` and
-`getsid`, and return typed errors for exited and denied processes.
+`ProcessInfo` decodes `kinfo_proc`, read for every process with one
+`kern.proc.all` sysctl or for one process with `kern.proc.pid`. `Pid` has
+`executable_path` (`proc_pidpath`) and `session` (`getsid`). Errors distinguish
+an exited process, a denied read, and data that the kernel does not provide for
+a live process, such as `kernel_task`'s executable path.
 
 #### 1.3 Arguments and environment
 
