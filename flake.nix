@@ -27,6 +27,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nix-darwin = {
+      url = "github:nix-darwin/nix-darwin";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
     treefmt-nix = {
@@ -43,6 +48,7 @@
         ./nix/devshell.nix
         ./nix/git-hooks.nix
         ./nix/harness.nix
+        ./nix/helper.nix
         ./nix/packages.nix
         ./nix/reuse.nix
         ./nix/treefmt.nix

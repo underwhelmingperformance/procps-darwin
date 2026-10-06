@@ -250,11 +250,12 @@ forces a particular source for debugging and tests.
 
 ### Helper daemon
 
-`procps-helperd` runs as root under launchd with socket activation. The plist's
-`Sockets` entry creates a Unix stream socket in a root-owned directory under
-`/var/run`, and the daemon obtains it with `launch_activate_socket`. launchd
-starts the daemon on the first connection, and the daemon exits a set time after
-its last connection closes.
+`procps-helperd` runs as root under launchd with socket activation. launchd
+creates the Unix stream socket that the plist's `Sockets` entry specifies, at
+`/var/run/procps-helperd.sock`, and the daemon obtains it with
+`launch_activate_socket`. launchd starts the daemon on the first connection, and
+the daemon exits a set time after it starts or after its last connection closes,
+whichever is later.
 
 - The daemon only reads. It never sends signals: `pkill` calls `kill(2)` as the
   invoking user, so the kernel's permission checks still apply.
@@ -678,7 +679,7 @@ needs log rotation.
 `HelperSource`, source selection at start-up, the root peer check and the
 override variable.
 
-`HelperSource` connects to `/var/run/procps-darwin/helper.sock`. Before it sends
+`HelperSource` connects to `/var/run/procps-helperd.sock`. Before it sends
 anything, it checks with `getpeereid` that the process listening on the socket
 runs as root, so that the tool never reads data from a socket that another user
 has created at the path. The whole exchange has a 30-second deadline. The
@@ -701,15 +702,56 @@ does not wait for a failing helper on each refresh. When a tool reads process
 data itself, it shows `-` for each value that macOS withholds from other users'
 processes, including values that Linux shows to every user.
 
-#### 3.5 Packaging
+#### 3.5 Packaging (done)
 
-The launchd plist, a nix-darwin module that installs the daemon and its socket,
-and install and uninstall instructions for users without nix-darwin. The socket
-is `/var/run/procps-darwin/helper.sock`, and only root may write to its
-directory. The directory has mode 0755 and the socket has mode 0666, because
-`connect(2)` needs search permission on the directory and write permission on
-the socket, and every user's tools connect to it. The property list sets
-`StandardErrorPath` and the log needs rotation, as task 3.3 describes.
+The launchd plist, a nix-darwin module that installs the daemon's launchd job,
+and install and uninstall instructions for users without nix-darwin.
+
+`nix/helper.nix` defines the launchd job once. The nix-darwin module,
+`darwinModules.default`, installs the job with the packaged binary when
+`services.procps-helperd.enable` is set. For an installation without nix-darwin,
+`just helper-plist` writes the standalone job to `packaging/launchd/`. The
+standalone job runs `/usr/local/libexec/procps-helperd`. `docs/helper.md`
+describes both installations and how to remove them.
+
+One flake check compares the committed property list with the generated one.
+Another evaluates the module in a nix-darwin system. It compares the module's
+job with the standalone job, apart from the program arguments, checks that the
+module's job runs the packaged binary, compares the newsyslog rule, and checks
+that the activation script sets the log's mode.
+
+launchd creates the socket at `/var/run/procps-helperd.sock` with mode 0666,
+because every user's tools connect to it and `connect(2)` needs write permission
+on the socket. macOS empties `/var/run` at boot, so a directory for the socket
+would have to be created again at every boot before launchd binds the socket.
+Apple's own launchd sockets, such as `syslog` and `mDNSResponder`, are directly
+in `/var/run`.
+
+A root-owned directory would have stopped processes other than root from
+creating a file at the socket's path. A process running as a member of the
+`daemon` group can create files in `/var/run`, so it could create a socket at
+the path before launchd does. The client's peer check refuses a socket that a
+process other than root listens on, and the tools then read process data
+themselves. Such a process can therefore deny the tools the helper's data, but
+cannot give them false data. Task 3.6 must document this denial of service.
+
+The helper logs to `/var/log/procps-helperd.log`. The log records which users
+ran the tools and when, so both installations create it as `root:admin` with
+mode 0640 before launchd starts the helper. launchd would otherwise create it
+with mode 0644. A newsyslog rule in `packaging/newsyslog/` rotates the log at 1
+MiB and keeps five old logs. The `B` flag stops newsyslog from writing a
+plain-text line into the JSON log.
+
+The helper receives the log only as its standard error, which launchd opens, so
+the helper cannot reopen the log after a rotation. A helper that tools such as
+`top` keep busy never reaches its idle time. After it has run for an hour, the
+helper therefore exits at the next check that finds no open connection, and
+launchd starts a new helper, with the new log, for the next connection. The
+listener checks when a client connects, before it accepts the connection, and at
+least once a second. A listener that accepted first would always find an open
+connection while clients keep arriving. Compressing a rotated log would delete
+the file that an old helper still writes to, so the rule does not compress
+rotated logs.
 
 #### 3.6 Threat model
 

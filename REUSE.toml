@@ -9,6 +9,7 @@ path = [
   "crates/procps-harness/golden/**",
   "flake.lock",
   "nix/wrapscallion/sources.json",
+  "packaging/launchd/*.plist",
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"

@@ -22,7 +22,7 @@ use crate::{
 /// ```
 /// assert!(procps_core::helper::SOCKET.starts_with("/var/run/"));
 /// ```
-pub const SOCKET: &str = "/var/run/procps-darwin/helper.sock";
+pub const SOCKET: &str = "/var/run/procps-helperd.sock";
 
 /// How long a tool waits for the whole exchange with the helper. Keep it above
 /// the helper's time limits, whose defaults add up to 21 seconds, so that the
