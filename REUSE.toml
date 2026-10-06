@@ -1,6 +1,9 @@
 version = 1
 
+# Tools generate these files, and generated output has no author who could own
+# its copyright. NONE records that, and CC0-1.0 waives any right that a
+# jurisdiction might still grant.
 [[annotations]]
 path = ["flake.lock", "nix/wrapscallion/sources.json"]
-SPDX-FileCopyrightText = "2026 Iain Lane <iain@orangesquash.org.uk>"
-SPDX-License-Identifier = "GPL-3.0-or-later"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
