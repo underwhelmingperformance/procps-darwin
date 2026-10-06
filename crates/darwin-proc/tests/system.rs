@@ -6,7 +6,7 @@
 
 use std::{
     process::Command,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use darwin_proc::{Host, ProcessInfo};
@@ -146,6 +146,22 @@ fn the_logged_in_users_match_who() -> Result<(), Box<dyn std::error::Error>> {
     let sessions = String::from_utf8(output.stdout)?.lines().count();
 
     assert_eq!(Host::logged_in_users(), sessions);
+
+    Ok(())
+}
+
+#[test]
+fn the_uptime_advances_with_the_monotonic_clock() -> Result<(), Box<dyn std::error::Error>> {
+    let start = (Host::uptime()?, Instant::now());
+    std::thread::sleep(Duration::from_millis(100));
+    let end = (Host::uptime()?, Instant::now());
+    let advanced = end.0.checked_sub(start.0).ok_or("the uptime decreased")?;
+    let elapsed = end.1 - start.1;
+
+    assert!(
+        advanced.abs_diff(elapsed) < Duration::from_millis(50),
+        "the uptime advanced by {advanced:?} in {elapsed:?}"
+    );
 
     Ok(())
 }

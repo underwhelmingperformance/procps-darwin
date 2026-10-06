@@ -218,11 +218,13 @@ buffer. Tests check each added struct's size against the SDK header.
 
 ### Data model and sources
 
-Each process record has field groups: identity, arguments, environment, CPU,
-memory, threads, memory regions, file descriptors and working directory. Every
-value is a `Field<T>` that is either available, denied, or not applicable on
-macOS. The formatter decides how each case is shown, following the compatibility
-rules.
+Each process record has its identity, which a source always reads, and field
+groups: arguments, environment, usage (CPU time, memory and I/O), threads,
+memory regions, file descriptors and working directory. Every value apart from
+the `kinfo_proc` record is a `Field<T>`, or for the usage group a pair of them.
+A `Field<T>` is available, denied, unsupported on macOS for that process, or
+failed for another reason. The formatter decides how each case is shown,
+following the compatibility rules.
 
 A `SnapshotRequest` lists the field groups that the caller needs.
 `ps -o pid,comm` therefore never reads arguments or walks memory regions, and
@@ -473,14 +475,34 @@ calls return a `kern_return_t`, which `Error::Mach` reports.
 
 ### Phase 2: core model (`procps-core`)
 
-#### 2.1 Domain model
+#### 2.1 Domain model (done)
 
-Process, thread and system records, `Field<T>`, field groups and
-`SnapshotRequest`.
+`procps-core` has `Field<T>`, the `FieldGroup`s, `SnapshotRequest`, and the
+`Snapshot`, `Process` and `System` records. The records contain the
+`darwin-proc` types, so the model does not repeat their fields. A value of
+`None` in a record means that the request did not ask for its group.
 
-#### 2.2 Sources
+CPU time and memory form one `Usage` group, because both come from
+`PROC_PIDTASKINFO` and `proc_pid_rusage`, which need the same permission. For a
+zombie only `proc_pid_rusage` succeeds, and procps-ng shows a zombie's CPU time,
+so the group keeps a separate `Field` for each call. To let `top` measure the
+interval between two snapshots, a snapshot also records the time since boot from
+`mach_continuous_time`. Unlike the wall clock, which can be set backwards, the
+time since boot never decreases.
 
-`ProcessSource`, `LocalSource` and `FixtureSource`.
+#### 2.2 Sources (done)
+
+`ProcessSource`, `LocalSource` and `FixtureSource`. `LocalSource` leaves out a
+process that exits while `LocalSource` reads it, and turns every other
+`darwin-proc` error into a `Field`: denied, unsupported, or failed with a logged
+warning. It reads `KERN_PROCARGS2` once when a request asks for both arguments
+and environment. macOS 27 withholds the environment of a platform binary from
+other processes, and returns no strings in its place, or only the first string
+if the binary's `argv[0]` is empty. `LocalSource` therefore reports another
+process's environment as denied when the environment has no strings, or has one
+string and the process's `argv[0]` is empty, even if that is the real
+environment. A `FixtureSource` reports a requested group that its fixture lacks
+as unsupported.
 
 #### 2.3 Linux mappings
 
@@ -521,12 +543,18 @@ Implement and document in `docs/mappings.md`:
 #### 3.1 Protocol
 
 Request and response types, version negotiation, framing and size limits, with
-round-trip tests.
+round-trip tests. The `procps-core` records contain `darwin-proc` types, so this
+task either adds `serde` derives to `darwin-proc` behind a feature or defines
+wire types in the protocol module.
 
 #### 3.2 Access policy
 
 The rules under Architecture, including a decision for each Darwin extension
-field. Tests inject caller credentials and a `FixtureSource`.
+field. Tests inject caller credentials and a `FixtureSource`. The `Usage` group
+includes the numbers of bytes that a process has read from and written to disk.
+Linux lets only a process's owner read those counts in `/proc/<pid>/io`. The
+policy can let any user read the CPU time and memory in the group, so it has to
+withhold the disk counts separately.
 
 #### 3.3 Daemon
 

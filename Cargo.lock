@@ -369,6 +369,14 @@ dependencies = [
 [[package]]
 name = "procps-core"
 version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "darwin-proc",
+ "pretty_assertions",
+ "rstest",
+ "thiserror",
+ "tracing",
+]
 
 [[package]]
 name = "procps-harness"
