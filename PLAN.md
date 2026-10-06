@@ -323,15 +323,11 @@ when `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and
 
 ### Phase 0: groundwork
 
-#### 0.1 Data-availability spike
+#### 0.1 Data-availability spike (done)
 
-The root probe of `kernel_task`, `launchd` and `WindowServer` is done, and its
-results are under "What macOS exposes". The remaining checks are: whether
-`kinfo_proc` reports supplementary groups and pending signals for other users'
-processes, whether `processor_set_statistics` returns task and thread totals
-without privileges, and whether `PROC_PIDTHREADID64INFO` and a full region walk
-succeed as root against platform binaries. Done when `docs/darwin-data.md`
-contains the results table for all of these calls.
+`docs/darwin-data.md` records the results: group lists, pending and blocked
+signals, `processor_set_statistics`, `PROC_PIDTHREADID64INFO` and the region
+walk, each as an unprivileged user and as root.
 
 #### 0.2 Repository scaffolding (done)
 
