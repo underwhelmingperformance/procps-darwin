@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# The crates are not published, and clippy skips the `cargo` lints for an
+# unpublished crate unless this is set.
+cargo-ignore-publish = true
