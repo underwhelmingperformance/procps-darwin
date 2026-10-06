@@ -144,6 +144,7 @@ dependencies = [
  "pretty_assertions",
  "rstest",
  "rustix",
+ "tempfile",
  "thiserror",
  "tracing",
 ]

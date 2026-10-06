@@ -32,6 +32,13 @@ unsafe impl Plain for ProcRegionInfo {}
 // SAFETY: `RusageInfoV6` contains only integers and arrays of integers.
 unsafe impl Plain for RusageInfoV6 {}
 
+// SAFETY: `proc_vnodepathinfo` contains only integers, `c_char` values and
+// arrays of both.
+unsafe impl Plain for libc::proc_vnodepathinfo {}
+
+// SAFETY: `proc_fdinfo` contains only integers.
+unsafe impl Plain for libc::proc_fdinfo {}
+
 // SAFETY: `proc_taskinfo` contains only integers.
 unsafe impl Plain for libc::proc_taskinfo {}
 

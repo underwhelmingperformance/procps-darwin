@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    Call, Error, Pid, SignalSet,
+    Call, Error, Gid, Pid, SignalSet, Uid,
     ffi::{self, KinfoProc},
     sysctl::{sysctl, zeroed},
 };
@@ -58,24 +58,24 @@ pub struct Terminal {
 }
 
 /// The user and group IDs of a process.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Credentials {
     /// The real user ID.
-    pub ruid: u32,
+    pub ruid: Uid,
     /// The effective user ID.
-    pub euid: u32,
+    pub euid: Uid,
     /// The saved user ID.
-    pub svuid: u32,
+    pub svuid: Uid,
     /// The real group ID.
-    pub rgid: u32,
+    pub rgid: Gid,
     /// The effective group ID, which Darwin keeps as the first entry of the
     /// group list.
-    pub egid: u32,
+    pub egid: Gid,
     /// The saved group ID.
-    pub svgid: u32,
+    pub svgid: Gid,
     /// The group list, starting with the effective group ID. `kinfo_proc` has
     /// room for 16 groups, so a longer list is truncated.
-    pub groups: Vec<u32>,
+    pub groups: Vec<Gid>,
 }
 
 /// The kernel's status for a process, from `p_stat`.
@@ -237,7 +237,12 @@ impl From<&KinfoProc> for ProcessInfo {
         let group_count = usize::try_from(ucred.cr_ngroups)
             .unwrap_or(0)
             .min(ffi::NGROUPS);
-        let groups = ucred.cr_groups[..group_count].to_vec();
+        let groups: Vec<Gid> = ucred.cr_groups[..group_count]
+            .iter()
+            .copied()
+            .map(Gid::from)
+            .collect();
+        let rgid = Gid::from(eproc.e_pcred.p_rgid);
         let start = proc.p_starttime;
 
         Self {
@@ -249,12 +254,12 @@ impl From<&KinfoProc> for ProcessInfo {
                 foreground_group: Pid::from(eproc.e_tpgid),
             }),
             credentials: Credentials {
-                ruid: eproc.e_pcred.p_ruid,
-                euid: ucred.cr_uid,
-                svuid: eproc.e_pcred.p_svuid,
-                rgid: eproc.e_pcred.p_rgid,
-                egid: groups.first().copied().unwrap_or(eproc.e_pcred.p_rgid),
-                svgid: eproc.e_pcred.p_svgid,
+                ruid: Uid::from(eproc.e_pcred.p_ruid),
+                euid: Uid::from(ucred.cr_uid),
+                svuid: Uid::from(eproc.e_pcred.p_svuid),
+                rgid,
+                egid: groups.first().copied().unwrap_or(rgid),
+                svgid: Gid::from(eproc.e_pcred.p_svgid),
                 groups,
             },
             nice: proc.p_nice,
@@ -336,7 +341,7 @@ impl Pid {
     /// let launchd = Pid::from(1).info()?;
     ///
     /// assert_eq!(
-    ///     (launchd.comm.as_str(), launchd.credentials.euid),
+    ///     (launchd.comm.as_str(), launchd.credentials.euid.as_raw()),
     ///     ("launchd", 0)
     /// );
     /// # Ok::<(), darwin_proc::Error>(())
@@ -387,7 +392,7 @@ mod tests {
 
     use super::{Credentials, ProcessFlags, ProcessInfo, Status, Terminal};
     use crate::{
-        Pid, SignalSet,
+        Gid, Pid, SignalSet, Uid,
         ffi::{self, KinfoProc},
         sysctl::zeroed,
     };
@@ -439,13 +444,13 @@ mod tests {
                 foreground_group: Pid::from(4310),
             }),
             credentials: Credentials {
-                ruid: 501,
-                euid: 503,
-                svuid: 502,
-                rgid: 20,
-                egid: 12,
-                svgid: 21,
-                groups: vec![12, 20, 80],
+                ruid: Uid::from(501),
+                euid: Uid::from(503),
+                svuid: Uid::from(502),
+                rgid: Gid::from(20),
+                egid: Gid::from(12),
+                svgid: Gid::from(21),
+                groups: [12, 20, 80].map(Gid::from).to_vec(),
             },
             nice: -5,
             priority: 31,
@@ -493,8 +498,8 @@ mod tests {
             ProcessInfo::from(&kinfo),
             ProcessInfo {
                 credentials: Credentials {
-                    egid,
-                    groups,
+                    egid: Gid::from(egid),
+                    groups: groups.into_iter().map(Gid::from).collect(),
                     ..expected().credentials
                 },
                 ..expected()

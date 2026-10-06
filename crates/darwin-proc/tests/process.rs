@@ -13,7 +13,7 @@ use std::{
 };
 
 use assert_matches::assert_matches;
-use darwin_proc::{Error, Pid, ProcessInfo};
+use darwin_proc::{Error, Pid, ProcessInfo, Uid};
 use pretty_assertions::assert_eq;
 
 /// The fields of a process that a test can predict.
@@ -21,8 +21,8 @@ use pretty_assertions::assert_eq;
 struct Known {
     pid: Pid,
     ppid: Pid,
-    ruid: u32,
-    euid: u32,
+    ruid: Uid,
+    euid: Uid,
     comm: String,
 }
 
@@ -48,8 +48,8 @@ fn this_process() -> Result<Known, Box<dyn std::error::Error>> {
     Ok(Known {
         pid: Pid::current(),
         ppid: Pid::from(i32::try_from(std::os::unix::process::parent_id())?),
-        ruid: rustix::process::getuid().as_raw(),
-        euid: rustix::process::geteuid().as_raw(),
+        ruid: Uid::from(rustix::process::getuid().as_raw()),
+        euid: Uid::from(rustix::process::geteuid().as_raw()),
         comm: name.chars().take(16).collect(),
     })
 }
@@ -81,8 +81,8 @@ fn another_users_process_is_read() -> Result<(), Box<dyn std::error::Error>> {
         Known {
             pid: Pid::from(1),
             ppid: Pid::from(0),
-            ruid: 0,
-            euid: 0,
+            ruid: Uid::from(0),
+            euid: Uid::from(0),
             comm: "launchd".to_owned(),
         }
     );
