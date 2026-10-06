@@ -513,13 +513,15 @@ Implement and document in `docs/mappings.md`:
 - Priority and nice scales for `pri`, `PR` and `NI` (done).
 - Scheduling policy names (done).
 - Bits of the `f` column, where a Darwin flag has the same meaning (done).
-- Memory summary figures. Proposed: `buff/cache` is file-backed pages plus
+- Memory summary figures (done). `buff/cache` is file-backed pages plus
   purgeable pages, which matches Activity Monitor's "Cached Files", and `avail`
-  is free, speculative, file-backed and purgeable pages together. procps-ng
-  computes `used` as the total minus the available memory, so `free`, `used` and
+  is free, file-backed and purgeable pages together. XNU counts the speculative
+  pages as file-backed too, so they are not added again. procps-ng computes
+  `used` as the total minus the available memory, so `free`, `used` and
   `buff/cache` do not add up to the total.
-- CPU states: Darwin counts all user-mode time as user time and reports no nice
-  ticks, so `ni` shows `0.0` and `us` includes the time of niced processes.
+- CPU states (done): Darwin counts all user-mode time as user time and reports
+  no nice ticks, so `ni` shows `0.0` and `us` includes the time of niced
+  processes.
 - The sizes for `trs`, `drs`, `size` and `sz`. procps-ng computes `trs` and
   `drs` from the virtual size and the bounds of the code segment in
   `/proc/<pid>/stat`, not from the memory regions. `size` is `VmData` plus
@@ -670,6 +672,10 @@ Uptime and load, task and thread counts by state, CPU lines (`us`, `sy`, `ni`
 and `id` from Darwin ticks; `wa`, `hi`, `si` and `st` show `0.0`), per-CPU
 lines, the memory and swap lines using the 2.3 mapping, and the bar and block
 graph modes.
+
+procps-ng 4.0.7's `top` can show only the performance cores or only the
+efficiency cores. Apple silicon has both kinds, so that toggle needs each
+processor's core type, which `Host::processors` does not report yet.
 
 #### 6.3 Fields and sorting
 
