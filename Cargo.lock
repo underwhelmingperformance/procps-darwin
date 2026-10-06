@@ -429,8 +429,11 @@ dependencies = [
  "darwin-proc",
  "postcard",
  "pretty_assertions",
+ "procps-core",
  "rstest",
+ "rustix",
  "serde",
+ "tempfile",
  "thiserror",
  "tracing",
 ]

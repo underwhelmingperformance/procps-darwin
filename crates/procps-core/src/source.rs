@@ -9,7 +9,9 @@ use std::{
 
 use darwin_proc::{Arguments, Host, Pid, ProcessInfo};
 
-use crate::{Field, FieldGroup, Process, Snapshot, SnapshotRequest, System, Usage};
+use crate::{
+    Field, FieldGroup, Process, Snapshot, SnapshotRequest, System, Usage, helper::HelperError,
+};
 
 /// Takes snapshots of processes and the system.
 ///
@@ -39,6 +41,9 @@ pub enum SourceError {
     /// The source could not read the system statistics.
     #[error("cannot read system statistics")]
     System(#[source] darwin_proc::Error),
+    /// The source could not take the snapshot through the helper.
+    #[error("cannot take a snapshot through the helper")]
+    Helper(#[from] HelperError),
 }
 
 /// Reads processes with `darwin-proc` directly, in the calling process,
@@ -57,7 +62,7 @@ pub enum SourceError {
 /// assert_eq!(snapshot.processes.len(), 1);
 /// # Ok::<(), procps_core::SourceError>(())
 /// ```
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LocalSource;
 
 /// The process exited while the source read it.

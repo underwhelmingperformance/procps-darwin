@@ -14,10 +14,10 @@ use std::{
 };
 
 use darwin_proc::LaunchdSockets;
-use procps_core::LocalSource;
+use procps_core::{ErrorChain, LocalSource};
 use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
 
-use crate::{ConnectionLimits, ErrorChain, ListenError, Listener, Server, TimeLimits};
+use crate::{ConnectionLimits, ListenError, Listener, Server, TimeLimits};
 
 /// The name of the entry in the `Sockets` dictionary of the helper's launchd
 /// property list.

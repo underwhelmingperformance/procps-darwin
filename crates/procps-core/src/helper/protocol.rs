@@ -71,32 +71,48 @@ pub enum Response {
 
 /// The reason why the helper did not handle a request.
 ///
-/// A tool should read process data itself after any refusal or
-/// [`ProtocolError`]. When a request has another version or is too large, or
-/// when the helper has too many connections open, the helper sends the refusal
-/// and closes the connection without reading the rest of the request. A tool
-/// that is still writing the request then gets [`io::ErrorKind::BrokenPipe`]
-/// from the write before it reads the refusal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// [`HelperOrLocal`](crate::HelperOrLocal) reads process data in the tool after
+/// any refusal or [`ProtocolError`].
+///
+/// When a request has another version or is too large, or when the helper has
+/// too many connections open, the helper sends a refusal and closes the
+/// connection without reading the rest of the request. A tool that is still
+/// writing the request then gets [`io::ErrorKind::BrokenPipe`] or
+/// [`io::ErrorKind::NotConnected`] from the write, and can read the refusal
+/// afterwards.
+///
+/// ```
+/// use procps_core::helper::Refusal;
+///
+/// assert_eq!(Refusal::Busy.to_string(), "the helper is busy");
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, thiserror::Error)]
 pub enum Refusal {
     /// The request has another protocol version. The header of this refusal
     /// has the helper's version, so a tool with another version detects the
     /// mismatch from the header and does not decode the body.
+    #[error("the helper uses another version of the protocol")]
     Version,
     /// The request's body is larger than [`Request::LIMIT`].
+    #[error("the request is too large for the helper")]
     RequestTooLarge,
     /// The helper could not decode the request.
+    #[error("the helper could not decode the request")]
     Malformed,
     /// The helper could not take the snapshot, for example because it could
     /// not list the processes.
+    #[error("the helper could not read the process data")]
     Failed,
     /// The helper did not finish the request within its time limit.
+    #[error("the request took longer than the helper's time limit")]
     TimedOut,
     /// The encoded response is larger than [`Response::LIMIT`].
+    #[error("the response is too large for the protocol")]
     ResponseTooLarge,
     /// The helper has too many connections open, for all clients or for the
     /// client's user, or the wait for a worker used more than half the
     /// snapshot time limit.
+    #[error("the helper is busy")]
     Busy,
 }
 

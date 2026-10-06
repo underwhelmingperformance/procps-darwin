@@ -17,6 +17,73 @@ use crate::{Call, Error, Gid, Pid, Uid, ffi};
 )]
 const PID_LENGTH: libc::socklen_t = size_of::<libc::pid_t>() as libc::socklen_t;
 
+/// The effective user and group IDs of the process at the other end of a
+/// connected Unix-domain socket, from `getpeereid`. They remain readable after
+/// the peer closes the connection.
+///
+/// ```
+/// use std::os::unix::net::UnixStream;
+///
+/// use darwin_proc::{PeerCredentials, Pid};
+///
+/// let (ours, _theirs) = UnixStream::pair()?;
+///
+/// assert_eq!(
+///     PeerCredentials::of(&ours)?.uid,
+///     Pid::current().info()?.credentials.euid
+/// );
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PeerCredentials {
+    /// The peer's effective user ID when it connected, or when it called
+    /// `listen` if it is the listening end.
+    pub uid: Uid,
+    /// The peer's effective group ID when it connected, or when it called
+    /// `listen` if it is the listening end.
+    pub gid: Gid,
+}
+
+impl PeerCredentials {
+    /// Reads the credentials of the peer of `socket`.
+    ///
+    /// ```
+    /// use std::os::unix::net::UnixStream;
+    ///
+    /// use darwin_proc::PeerCredentials;
+    ///
+    /// let (ours, theirs) = UnixStream::pair()?;
+    ///
+    /// assert_eq!(PeerCredentials::of(&ours)?, PeerCredentials::of(&theirs)?);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Os`] if `socket` is not a Unix-domain socket that has
+    /// been connected.
+    #[tracing::instrument(level = "debug", skip_all, err(level = "debug"))]
+    pub fn of(socket: impl AsFd) -> Result<Self, Error> {
+        let fd = socket.as_fd().as_raw_fd();
+        let mut uid = 0;
+        let mut gid = 0;
+
+        // SAFETY: `socket` keeps `fd` open for the call, and `uid` and `gid`
+        // are valid for writes.
+        if unsafe { libc::getpeereid(fd, &raw mut uid, &raw mut gid) } != 0 {
+            return Err(Error::Os {
+                call: Call::PeerCredentials,
+                source: io::Error::last_os_error(),
+            });
+        }
+
+        Ok(Self {
+            uid: Uid::from(uid),
+            gid: Gid::from(gid),
+        })
+    }
+}
+
 /// The process at the other end of a connected Unix-domain socket.
 ///
 /// ```
@@ -64,19 +131,8 @@ impl Peer {
     /// including after the peer has closed it.
     #[tracing::instrument(level = "debug", skip_all, err(level = "debug"))]
     pub fn of(socket: impl AsFd) -> Result<Self, Error> {
+        let credentials = PeerCredentials::of(&socket)?;
         let fd = socket.as_fd().as_raw_fd();
-        let mut uid = 0;
-        let mut gid = 0;
-
-        // SAFETY: `socket` keeps `fd` open for the call, and `uid` and `gid`
-        // are valid for writes.
-        if unsafe { libc::getpeereid(fd, &raw mut uid, &raw mut gid) } != 0 {
-            return Err(Error::Os {
-                call: Call::PeerCredentials,
-                source: io::Error::last_os_error(),
-            });
-        }
-
         let mut pid: libc::pid_t = 0;
         let mut length = PID_LENGTH;
 
@@ -107,8 +163,8 @@ impl Peer {
         }
 
         Ok(Self {
-            uid: Uid::from(uid),
-            gid: Gid::from(gid),
+            uid: credentials.uid,
+            gid: credentials.gid,
             pid: Pid::from(pid),
         })
     }
