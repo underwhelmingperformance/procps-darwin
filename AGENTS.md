@@ -68,7 +68,9 @@ exporter.
 ## Architecture
 
 - `darwin-proc` contains every FFI declaration and every `unsafe` block. Each
-  `unsafe` block has a `// SAFETY:` comment.
+  `unsafe` block has a `// SAFETY:` comment. The workspace denies `unsafe_code`,
+  and `darwin-proc` opts out with `#![expect(unsafe_code, reason = "...")]` at
+  its root.
 - The tools read process data only through the `ProcessSource` trait, so tests
   can substitute `FixtureSource`.
 - A `SnapshotRequest` lists only the field groups that a command needs, because
@@ -84,7 +86,9 @@ exporter.
   dispatches. The program logic is in modules.
 - Clippy is strict, configured in `[workspace.lints]`. Fix what a lint reports.
   Where a lint does not apply, use `#[expect(lint, reason = "...")]`, which
-  warns once the code stops triggering the lint.
+  warns once the code stops triggering the lint. Clippy rejects `#[allow]`.
+- `missing_docs` applies to every crate, so each integration test, example and
+  benchmark file starts with a `//!` doc comment.
 - Use private or `pub(crate)` visibility by default, and keep the public APIs of
   the library crates small. Every public item has a doc comment, and every
   public function and method has a doctest.
@@ -158,10 +162,18 @@ exporter.
 ## Development environment
 
 - The flake's development shell provides the Rust toolchain, nightly `rustfmt`,
-  `just` and `reuse`, and installs the git hooks. Run commands through it with
-  `nix develop -c <command>`, or use direnv with the `.envrc`.
-- `nix develop -c just fmt` formats every file with treefmt.
-  `nix develop -c just check` runs `nix flake check`, which includes the treefmt
-  and `reuse lint` checks.
+  `just`, `cargo-deny`, `cargo-audit` and `reuse`, and installs the git hooks.
+  Run commands through it with `nix develop -c <command>`, or use direnv with
+  the `.envrc`.
+- `nix develop -c just test` runs the tests. `just clippy`, `just doc`,
+  `just deny`, `just audit` and `just reuse` run one check each, and `just fmt`
+  formats every file with treefmt.
+- `nix develop -c just check` runs clippy, the tests, the documentation build,
+  `cargo deny`, `cargo audit` and `reuse lint`, then `nix flake check`. The
+  flake check builds the workspace with Nix and repeats those checks, in the dev
+  profile as locally, and runs treefmt. Its audit reads the RustSec advisory
+  database pinned in `flake.lock`. Renovate's weekly lock-file maintenance is
+  configured to update it, and `nix flake update advisory-db` updates it by
+  hand. `just audit` reads the live database. CI runs `nix flake check`.
 - Commit messages use Conventional Commits, with bodies wrapped at 72 columns.
   The `commit-msg` hook checks them with wrapscallion.
