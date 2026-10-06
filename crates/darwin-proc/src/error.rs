@@ -23,6 +23,18 @@ pub enum Call {
     /// environment.
     #[display("sysctl kern.procargs2")]
     Arguments,
+    /// `proc_pidinfo` with `PROC_PIDTASKINFO`.
+    #[display("proc_pidinfo PROC_PIDTASKINFO")]
+    TaskInfo,
+    /// `proc_pid_rusage` with `RUSAGE_INFO_V6`.
+    #[display("proc_pid_rusage RUSAGE_INFO_V6")]
+    ResourceUsage,
+    /// `proc_pidinfo` with `PROC_PIDLISTTHREADIDS`.
+    #[display("proc_pidinfo PROC_PIDLISTTHREADIDS")]
+    ThreadList,
+    /// `proc_pidinfo` with `PROC_PIDTHREADID64INFO`.
+    #[display("proc_pidinfo PROC_PIDTHREADID64INFO")]
+    ThreadInfo,
 }
 
 /// An error from reading process data.
@@ -74,5 +86,23 @@ impl Error {
             Some(libc::EPERM | libc::EACCES) => Self::Denied { pid, call },
             _ => Self::Os { call, source },
         }
+    }
+}
+
+impl Pid {
+    /// The error for `source`, which `call` returned for this process.
+    ///
+    /// Several calls fail with `ESRCH` for a zombie as well as for a process
+    /// that has exited, and `proc_pidpath` also fails with it for
+    /// `kernel_task`. This function therefore calls [`Pid::info`]: a process
+    /// that is still listed lacks the data and has not exited.
+    pub(crate) fn live_error(self, call: Call, source: io::Error) -> Error {
+        let error = Error::for_process(call, self, source);
+
+        if matches!(error, Error::Exited { .. }) && self.info().is_ok() {
+            return Error::Unsupported { pid: self, call };
+        }
+
+        error
     }
 }

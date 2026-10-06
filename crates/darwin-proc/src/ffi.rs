@@ -125,6 +125,87 @@ pub struct Vmspace {
     pub dummy4: [*mut c_char; 3],
 }
 
+/// `struct rusage_info_v6` from `<sys/resource.h>`.
+#[repr(C)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields keep their names from the SDK header"
+)]
+pub struct RusageInfoV6 {
+    pub ri_uuid: [u8; 16],
+    pub ri_user_time: u64,
+    pub ri_system_time: u64,
+    pub ri_pkg_idle_wkups: u64,
+    pub ri_interrupt_wkups: u64,
+    pub ri_pageins: u64,
+    pub ri_wired_size: u64,
+    pub ri_resident_size: u64,
+    pub ri_phys_footprint: u64,
+    pub ri_proc_start_abstime: u64,
+    pub ri_proc_exit_abstime: u64,
+    pub ri_child_user_time: u64,
+    pub ri_child_system_time: u64,
+    pub ri_child_pkg_idle_wkups: u64,
+    pub ri_child_interrupt_wkups: u64,
+    pub ri_child_pageins: u64,
+    pub ri_child_elapsed_abstime: u64,
+    pub ri_diskio_bytesread: u64,
+    pub ri_diskio_byteswritten: u64,
+    pub ri_cpu_time_qos_default: u64,
+    pub ri_cpu_time_qos_maintenance: u64,
+    pub ri_cpu_time_qos_background: u64,
+    pub ri_cpu_time_qos_utility: u64,
+    pub ri_cpu_time_qos_legacy: u64,
+    pub ri_cpu_time_qos_user_initiated: u64,
+    pub ri_cpu_time_qos_user_interactive: u64,
+    pub ri_billed_system_time: u64,
+    pub ri_serviced_system_time: u64,
+    pub ri_logical_writes: u64,
+    pub ri_lifetime_max_phys_footprint: u64,
+    pub ri_instructions: u64,
+    pub ri_cycles: u64,
+    pub ri_billed_energy: u64,
+    pub ri_serviced_energy: u64,
+    pub ri_interval_max_phys_footprint: u64,
+    pub ri_runnable_time: u64,
+    pub ri_flags: u64,
+    pub ri_user_ptime: u64,
+    pub ri_system_ptime: u64,
+    pub ri_pinstructions: u64,
+    pub ri_pcycles: u64,
+    pub ri_energy_nj: u64,
+    pub ri_penergy_nj: u64,
+    pub ri_secure_time_in_system: u64,
+    pub ri_secure_ptime_in_system: u64,
+    pub ri_reserved: [u64; 12],
+}
+
+/// `struct mach_timebase_info` from `<mach/mach_time.h>`. The `libc` crate's
+/// declaration is deprecated in favour of the `mach2` crate.
+#[repr(C)]
+pub struct MachTimebaseInfo {
+    pub numer: u32,
+    pub denom: u32,
+}
+
+unsafe extern "C" {
+    /// `mach_timebase_info` from `<mach/mach_time.h>`.
+    pub fn mach_timebase_info(info: *mut MachTimebaseInfo) -> libc::c_int;
+}
+
+pub const RUSAGE_INFO_V6: libc::c_int = 6;
+
+pub const PROC_PIDTHREADID64INFO: libc::c_int = 15;
+
+/// Lists a process's 64-bit thread IDs. XNU declares it only in the private
+/// `bsd/sys/proc_info_private.h`. `PROC_PIDTHREADID64INFO` needs the IDs, and
+/// the only other source is a task port, which the tools do not have.
+pub const PROC_PIDLISTTHREADIDS: libc::c_int = 28;
+
+pub const POLICY_TIMESHARE: libc::c_int = 1;
+pub const POLICY_RR: libc::c_int = 2;
+pub const POLICY_FIFO: libc::c_int = 4;
+
 pub const MAXCOMLEN: usize = 16;
 pub const NGROUPS: usize = 16;
 
@@ -153,7 +234,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use super::{Eproc, ExternProc, KinfoProc, Pcred, Ucred};
+    use super::{Eproc, ExternProc, KinfoProc, Pcred, RusageInfoV6, Ucred};
 
     // The expected values come from a C program built against the macOS 27 SDK
     // that prints `sizeof` and `offsetof` for each struct.
@@ -212,6 +293,23 @@ mod tests {
                 offset_of!(Ucred, cr_groups),
             ],
             [16, 120, 264, 268, 276, 280, 316, 80, 84, 88, 92, 4, 8, 12]
+        );
+    }
+
+    #[test]
+    fn rusage_info_v6_matches_the_sdk() {
+        assert_eq!(
+            [
+                size_of::<RusageInfoV6>(),
+                offset_of!(RusageInfoV6, ri_phys_footprint),
+                offset_of!(RusageInfoV6, ri_lifetime_max_phys_footprint),
+                offset_of!(RusageInfoV6, ri_instructions),
+                offset_of!(RusageInfoV6, ri_cycles),
+                offset_of!(RusageInfoV6, ri_billed_energy),
+                offset_of!(RusageInfoV6, ri_flags),
+                offset_of!(RusageInfoV6, ri_reserved),
+            ],
+            [464, 72, 240, 248, 256, 264, 296, 368]
         );
     }
 }

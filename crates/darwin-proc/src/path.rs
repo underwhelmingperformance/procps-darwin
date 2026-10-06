@@ -49,22 +49,6 @@ impl Pid {
         Ok(PathBuf::from(OsStr::from_bytes(&buffer)))
     }
 
-    /// The error for `source`, which `call` returned for this process.
-    ///
-    /// `proc_pidpath` and `getsid` fail with `ESRCH` for a zombie as well as
-    /// for a process that has exited, and `proc_pidpath` also fails with it
-    /// for `kernel_task`. This function therefore calls [`Pid::info`]: a
-    /// process that is still listed lacks the data and has not exited.
-    fn live_error(self, call: Call, source: io::Error) -> Error {
-        let error = Error::for_process(call, self, source);
-
-        if matches!(error, Error::Exited { .. }) && self.info().is_ok() {
-            return Error::Unsupported { pid: self, call };
-        }
-
-        error
-    }
-
     /// The session ID of the process.
     ///
     /// ```

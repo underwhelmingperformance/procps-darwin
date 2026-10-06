@@ -4,7 +4,7 @@
 
 use std::{ffi::CStr, io};
 
-use crate::ffi::KinfoProc;
+use crate::ffi::{KinfoProc, RusageInfoV6};
 
 /// A type that the kernel may fill with any bytes.
 ///
@@ -19,9 +19,21 @@ unsafe impl Plain for u8 {}
 // SAFETY: every bit pattern is a valid `c_int`.
 unsafe impl Plain for libc::c_int {}
 
+// SAFETY: every bit pattern is a valid `u64`.
+unsafe impl Plain for u64 {}
+
 // SAFETY: `KinfoProc` contains only integers, arrays of integers and raw
 // pointers, for which every bit pattern is valid.
 unsafe impl Plain for KinfoProc {}
+
+// SAFETY: `RusageInfoV6` contains only integers and arrays of integers.
+unsafe impl Plain for RusageInfoV6 {}
+
+// SAFETY: `proc_taskinfo` contains only integers.
+unsafe impl Plain for libc::proc_taskinfo {}
+
+// SAFETY: `proc_threadinfo` contains only integers and an array of `c_char`.
+unsafe impl Plain for libc::proc_threadinfo {}
 
 /// A `T` with every byte zero, for the kernel to fill.
 pub(crate) fn zeroed<T: Plain>() -> T {
