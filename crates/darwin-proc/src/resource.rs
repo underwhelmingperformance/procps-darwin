@@ -22,6 +22,7 @@ use crate::{
 /// # Ok::<(), darwin_proc::Error>(())
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResourceUsage {
     /// The user CPU time.
     pub user_time: Duration,

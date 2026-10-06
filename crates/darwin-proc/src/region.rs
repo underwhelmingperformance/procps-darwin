@@ -23,6 +23,7 @@ use crate::{
 /// `resident`, `shared_now_private`, `swapped_out` and `dirtied` sizes of such
 /// a program's regions are then four times too large.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Region {
     /// The first address of the region.
     pub address: u64,
@@ -84,6 +85,7 @@ pub struct Region {
 /// );
 /// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, derive_more::From)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Protection(u32);
 
 impl Protection {
@@ -126,6 +128,7 @@ impl Protection {
 
 /// How a region's pages are shared, from the `SM_*` constants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ShareMode {
     /// `SM_COW`: shared until the process writes to a page, which the kernel
     /// then copies.

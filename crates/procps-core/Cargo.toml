@@ -19,7 +19,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-darwin-proc.workspace = true
+darwin-proc = { workspace = true, features = ["serde"] }
+postcard.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

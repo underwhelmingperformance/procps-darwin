@@ -16,6 +16,7 @@
 /// );
 /// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, derive_more::From)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SignalSet(u32);
 
 impl SignalSet {

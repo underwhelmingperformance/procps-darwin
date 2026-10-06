@@ -13,12 +13,13 @@ use darwin_proc::{
     LoadAverage, Memory, Pid, ProcessInfo, ProcessorTicks, Region, ResourceUsage, Swap, TaskInfo,
     TaskTotals, ThreadInfo,
 };
+use serde::{Deserialize, Serialize};
 
-use crate::{Field, FieldGroup, SnapshotRequest};
+use crate::{Field, FieldGroup, SnapshotRequest, path_field};
 
 /// The processes, and optionally the system statistics, that a source read in
 /// one pass.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     /// When the source started reading.
     pub taken: SystemTime,
@@ -37,11 +38,12 @@ pub struct Snapshot {
 ///
 /// The identity is always present. Every other value is `None` when the
 /// request did not ask for its [`FieldGroup`](crate::FieldGroup).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Process {
     /// The `kinfo_proc` record, which any user can read for every process.
     pub info: ProcessInfo,
     /// The path of the executable.
+    #[serde(with = "path_field")]
     pub executable: Field<PathBuf>,
     /// The session ID.
     pub session: Field<Pid>,
@@ -58,6 +60,7 @@ pub struct Process {
     /// The open file descriptors, in ascending order.
     pub file_descriptors: Option<Field<Vec<RawFd>>>,
     /// The working directory.
+    #[serde(with = "path_field::optional")]
     pub working_directory: Option<Field<PathBuf>>,
 }
 
@@ -142,7 +145,7 @@ impl Process {
 /// A process's CPU time, memory and I/O, from two calls that need the same
 /// permission. For a zombie, only `proc_pid_rusage` succeeds, and procps-ng
 /// shows a zombie's CPU time, so each call has its own field.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     /// What `PROC_PIDTASKINFO` reports.
     pub task: Field<TaskInfo>,
@@ -151,7 +154,7 @@ pub struct Usage {
 }
 
 /// The system statistics for `top`'s summary area.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct System {
     /// When the system booted.
     pub boot_time: SystemTime,

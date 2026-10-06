@@ -17,6 +17,7 @@ use crate::{
 /// What `struct kinfo_proc` reports about a process. Any user can read it for
 /// every process.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ProcessInfo {
     /// The process ID.
     pub pid: Pid,
@@ -52,6 +53,14 @@ pub struct ProcessInfo {
 
 /// A process's controlling terminal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    expect(
+        clippy::unsafe_derive_deserialize,
+        reason = "`devname_r` accepts any device number"
+    )
+)]
 pub struct Terminal {
     /// The terminal's device number.
     pub device: libc::dev_t,
@@ -61,6 +70,7 @@ pub struct Terminal {
 
 /// The user and group IDs of a process.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Credentials {
     /// The real user ID.
     pub ruid: Uid,
@@ -85,6 +95,7 @@ pub struct Credentials {
 /// Darwin reports [`Status::Running`] for almost every live process, whether
 /// it is runnable or asleep. Only the states of its threads show which.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Status {
     /// `SIDL`: being created.
     Idle,
@@ -127,6 +138,7 @@ impl From<libc::c_char> for Status {
 /// );
 /// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, derive_more::From)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AccountingFlags(u16);
 
 impl AccountingFlags {
@@ -169,6 +181,7 @@ impl AccountingFlags {
 /// );
 /// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, derive_more::From)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ProcessFlags(u32);
 
 impl ProcessFlags {

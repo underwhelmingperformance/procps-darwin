@@ -24,6 +24,14 @@
     derive_more::From,
     derive_more::Into,
 )]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    expect(
+        clippy::unsafe_derive_deserialize,
+        reason = "the kernel checks every process ID that the unsafe calls pass to it"
+    )
+)]
 pub struct Pid(libc::pid_t);
 
 impl Pid {

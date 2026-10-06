@@ -27,6 +27,7 @@ darwin-proc = { path = "crates/darwin-proc" }
 derive_more = { version = "2.1.1", features = ["display", "from", "into"] }
 libc = "0.2.190"
 libtest-mimic = "0.8.2"
+postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
 pretty_assertions = "1.4.1"
 procps-harness = { path = "crates/procps-harness" }
 regex = "1.13.1"

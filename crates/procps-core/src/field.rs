@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use serde::{Deserialize, Serialize};
+
 /// A value that a source read for a process, or the reason why the source has
 /// no value.
 ///
@@ -16,7 +18,7 @@
 ///
 /// assert_eq!(size.map(|bytes| bytes / 1024), Field::Available(4));
 /// ```
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum Field<T> {
     /// The source read the value.
     Available(T),

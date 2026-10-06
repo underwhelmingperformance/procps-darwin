@@ -32,6 +32,14 @@ use std::{
     derive_more::From,
     derive_more::Into,
 )]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    expect(
+        clippy::unsafe_derive_deserialize,
+        reason = "the user database lookups accept any user ID"
+    )
+)]
 pub struct Uid(libc::uid_t);
 
 /// A group ID.
@@ -56,6 +64,14 @@ pub struct Uid(libc::uid_t);
     derive_more::Display,
     derive_more::From,
     derive_more::Into,
+)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    expect(
+        clippy::unsafe_derive_deserialize,
+        reason = "the group database lookups accept any group ID"
+    )
 )]
 pub struct Gid(libc::gid_t);
 
