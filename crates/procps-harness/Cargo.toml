@@ -20,6 +20,7 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
+derive_more.workspace = true
 regex.workspace = true
 rustix.workspace = true
 serde.workspace = true
