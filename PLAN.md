@@ -426,11 +426,30 @@ CPU time in Mach absolute time, whose unit is 125/3 nanoseconds on Apple
 silicon, while `PROC_PIDTHREADID64INFO` reports nanoseconds. macOS reports 0 for
 every thread's sleep time.
 
-#### 1.5 Memory region walk
+#### 1.5 Memory region walk (done)
 
-Iterate `PROC_PIDREGIONINFO` to compute text, data, shared, private and swapped
-sizes. Measure the cost on a process with many regions, because `top` may do
-this for every process on every refresh.
+`Pid::regions` calls `proc_pidinfo` with `PROC_PIDREGIONINFO` repeatedly, from
+address 0. It returns each region's address and size, protection, share mode,
+user tag, memory object ID, reference count and flags, and its resident, swapped
+and dirtied sizes in bytes. Task 2.3 classifies the regions into the sizes that
+`ps` and `top` show.
+
+The kernel counts the private and shared resident pages in its own 16 KiB pages.
+It reports the other page counts in the smaller of the caller's and the target's
+page sizes. No call reports another process's page size, so `darwin-proc`
+converts every page count with the caller's. On Apple silicon every arm64
+process has 16 KiB pages. Only an x86_64 program running under Rosetta can have
+4 KiB pages, and its `resident`, `shared_now_private`, `swapped_out` and
+`dirtied` sizes are then four times too large.
+
+For each region that has a memory object, the kernel visits every page and
+checks whether it is resident. A resident page costs much more to visit than a
+page that is not resident, so a walk takes time mostly in proportion to the
+process's resident memory. A walk of every process that an unprivileged user can
+read, 817 processes with 1.28 million regions in total, took 3.7 seconds. A walk
+of an OrbStack helper alone, with 4,831 regions and 1.6 GiB resident, took 860
+ms. A walk of a Chrome renderer with 199,201 regions and 330 MiB resident took
+130 ms.
 
 #### 1.6 Other per-process data
 
@@ -471,6 +490,9 @@ Implement and document in `docs/mappings.md`:
 - Memory summary figures. Proposed: `buff/cache` is file-backed pages plus
   purgeable pages, which matches Activity Monitor's "Cached Files", and `avail`
   is free, speculative, file-backed and purgeable pages together.
+- Region-based sizes for `trs`, `drs`, `size` and `sz`: classify the regions
+  from task 1.5 by protection, share mode, user tag and memory object, and
+  decide how to count the shared cache and other submaps.
 - Proportional set size: choose between an approximation from region sharing
   counts and `-`.
 - The command-name length: Linux truncates `comm` to 15 characters and `pgrep`
@@ -685,8 +707,10 @@ summary of `docs/mappings.md`.
   runner and some tests may need to be skipped there.
 - The interactive part of `top` is the largest single item. If it needs cutting,
   inspect mode (`Y`) and alternate windows (`A`) are the least used parts.
-- Walking memory regions for every process on every `top` refresh may be too
-  slow; task 1.5 measures this before `top` depends on it.
+- Walking memory regions for every process takes several seconds, which is
+  longer than `top`'s default refresh interval of 3 seconds (task 1.5). `top`
+  should walk regions only when a displayed field needs them, and those fields
+  may need a slower refresh or a cache.
 - A pid can be reused between enumeration and a later read. Records compare
   start times to detect this; the tools then treat the process as exited.
 

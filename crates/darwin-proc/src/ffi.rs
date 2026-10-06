@@ -193,6 +193,54 @@ unsafe extern "C" {
     pub fn mach_timebase_info(info: *mut MachTimebaseInfo) -> libc::c_int;
 }
 
+/// `struct proc_regioninfo` from `<sys/proc_info.h>`.
+#[repr(C)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields keep their names from the SDK header"
+)]
+pub struct ProcRegionInfo {
+    pub pri_protection: u32,
+    pub pri_max_protection: u32,
+    pub pri_inheritance: u32,
+    pub pri_flags: u32,
+    pub pri_offset: u64,
+    pub pri_behavior: u32,
+    pub pri_user_wired_count: u32,
+    pub pri_user_tag: u32,
+    pub pri_pages_resident: u32,
+    pub pri_pages_shared_now_private: u32,
+    pub pri_pages_swapped_out: u32,
+    pub pri_pages_dirtied: u32,
+    pub pri_ref_count: u32,
+    pub pri_shadow_depth: u32,
+    pub pri_share_mode: u32,
+    pub pri_private_pages_resident: u32,
+    pub pri_shared_pages_resident: u32,
+    pub pri_obj_id: u32,
+    pub pri_depth: u32,
+    pub pri_address: u64,
+    pub pri_size: u64,
+}
+
+pub const PROC_PIDREGIONINFO: libc::c_int = 7;
+
+pub const PROC_REGION_SUBMAP: u32 = 1;
+pub const PROC_REGION_SHARED: u32 = 2;
+
+pub const SM_COW: u32 = 1;
+pub const SM_PRIVATE: u32 = 2;
+pub const SM_EMPTY: u32 = 3;
+pub const SM_SHARED: u32 = 4;
+pub const SM_TRUESHARED: u32 = 5;
+pub const SM_PRIVATE_ALIASED: u32 = 6;
+pub const SM_SHARED_ALIASED: u32 = 7;
+pub const SM_LARGE_PAGE: u32 = 8;
+
+pub const VM_PROT_READ: u32 = 0x1;
+pub const VM_PROT_WRITE: u32 = 0x2;
+pub const VM_PROT_EXECUTE: u32 = 0x4;
+
 pub const RUSAGE_INFO_V6: libc::c_int = 6;
 
 pub const PROC_PIDTHREADID64INFO: libc::c_int = 15;
@@ -234,7 +282,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use super::{Eproc, ExternProc, KinfoProc, Pcred, RusageInfoV6, Ucred};
+    use super::{Eproc, ExternProc, KinfoProc, Pcred, ProcRegionInfo, RusageInfoV6, Ucred};
 
     // The expected values come from a C program built against the macOS 27 SDK
     // that prints `sizeof` and `offsetof` for each struct.
@@ -293,6 +341,23 @@ mod tests {
                 offset_of!(Ucred, cr_groups),
             ],
             [16, 120, 264, 268, 276, 280, 316, 80, 84, 88, 92, 4, 8, 12]
+        );
+    }
+
+    #[test]
+    fn proc_regioninfo_matches_the_sdk() {
+        assert_eq!(
+            [
+                size_of::<ProcRegionInfo>(),
+                offset_of!(ProcRegionInfo, pri_user_tag),
+                offset_of!(ProcRegionInfo, pri_pages_resident),
+                offset_of!(ProcRegionInfo, pri_pages_swapped_out),
+                offset_of!(ProcRegionInfo, pri_share_mode),
+                offset_of!(ProcRegionInfo, pri_private_pages_resident),
+                offset_of!(ProcRegionInfo, pri_address),
+                offset_of!(ProcRegionInfo, pri_size),
+            ],
+            [96, 32, 36, 44, 60, 64, 80, 88]
         );
     }
 
