@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use darwin_proc::{RunState, SchedulingPolicy, Status};
+use darwin_proc::{Region, RunState, SchedulingPolicy, ShareMode, Status};
 
 use crate::{Field, Process};
 
@@ -130,6 +130,46 @@ const PF_FORKNOEXEC: u64 = 0x40;
 /// `PF_SUPERPRIV` from Linux's `<linux/sched.h>`: the process used superuser
 /// privileges.
 const PF_SUPERPRIV: u64 = 0x100;
+
+/// A process's sizes in bytes, for procps-ng's memory columns.
+///
+/// Each size is `None` when the request did not ask for a group that the size
+/// comes from.
+///
+/// ```
+/// use darwin_proc::Pid;
+/// use procps_core::{Field, LinuxSizes, Process};
+///
+/// let info = Pid::current().info()?;
+/// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+///
+/// assert_eq!(process.linux_sizes(), LinuxSizes::default());
+/// # Ok::<(), darwin_proc::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LinuxSizes {
+    /// The virtual size, for `vsz`, `sz` and `m_size`, from `PROC_PIDTASKINFO`.
+    pub virtual_size: Option<Field<u64>>,
+    /// The resident size, for `rss`, from `PROC_PIDTASKINFO`.
+    pub resident: Option<Field<u64>>,
+    /// The size of the code, for `trs`: the executable regions outside
+    /// submaps. This leaves out the shared cache of system libraries.
+    pub text: Option<Field<u64>>,
+    /// The virtual size minus the size of the code, for `drs`.
+    pub data: Option<Field<u64>>,
+    /// The private writable regions outside submaps, for `size`, which is the
+    /// data and stack size on Linux.
+    pub data_and_stack: Option<Field<u64>>,
+    /// The resident memory that only this process uses, for `uss`.
+    pub unique: Option<Field<u64>>,
+    /// The proportional set size, for `pss`. Darwin does not report how many
+    /// processes share each page, so it is always unsupported.
+    pub proportional: Option<Field<u64>>,
+}
+
+/// The longest command name on Linux, in bytes: `TASK_COMM_LEN` minus the
+/// terminating NUL.
+const COMMAND_NAME_LENGTH: usize = 15;
 
 /// The highest real-time priority on Linux.
 const MAXIMUM_RT_PRIORITY: i32 = 99;
@@ -313,5 +353,91 @@ impl Process {
         }
 
         flags
+    }
+
+    /// The process's sizes for procps-ng's memory columns.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    ///
+    /// assert_eq!(process.linux_sizes().virtual_size, None);
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn linux_sizes(&self) -> LinuxSizes {
+        let task = self.usage.as_ref().map(|usage| usage.task);
+        let regions = self.regions.as_ref();
+        let sum = |keep: fn(&Region) -> bool, size: fn(&Region) -> u64| {
+            regions.map(|regions| {
+                regions
+                    .as_ref()
+                    .map(|regions| regions.iter().filter(|region| keep(region)).map(size).sum())
+            })
+        };
+        let outside_submaps = |region: &Region| !region.is_submap;
+
+        let text = sum(
+            |region| !region.is_submap && region.protection.is_executable(),
+            |region| region.size,
+        );
+        let data = match (task, text) {
+            (Some(task), Some(text)) => Some(match (task, text) {
+                (Field::Available(task), Field::Available(text)) => {
+                    Field::Available(task.virtual_size.saturating_sub(text))
+                }
+                (Field::Available(_), outcome) => outcome,
+                (outcome, _) => outcome.map(|task| task.virtual_size),
+            }),
+            _ => None,
+        };
+
+        LinuxSizes {
+            virtual_size: task.map(|task| task.map(|task| task.virtual_size)),
+            resident: task.map(|task| task.map(|task| task.resident_size)),
+            text,
+            data,
+            data_and_stack: sum(
+                |region| {
+                    !region.is_submap
+                        && region.protection.is_writable()
+                        && !matches!(
+                            region.share_mode,
+                            ShareMode::Shared | ShareMode::TrueShared | ShareMode::SharedAliased
+                        )
+                },
+                |region| region.size,
+            ),
+            unique: sum(outside_submaps, |region| region.private_resident),
+            proportional: regions.map(|_| Field::Unsupported),
+        }
+    }
+
+    /// The command name as Linux reports it: at most 15 bytes of `p_comm`, cut
+    /// at a character boundary. Darwin keeps up to 16 bytes in `p_comm`.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Field, Process};
+    ///
+    /// let mut info = Pid::current().info()?;
+    /// info.comm = "0123456789abcdef".to_owned();
+    /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    ///
+    /// assert_eq!(process.linux_comm(), "0123456789abcde");
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn linux_comm(&self) -> &str {
+        let comm = &self.info.comm;
+        let end = (0..=COMMAND_NAME_LENGTH.min(comm.len()))
+            .rev()
+            .find(|&end| comm.is_char_boundary(end))
+            .unwrap_or(0);
+
+        &comm[..end]
     }
 }

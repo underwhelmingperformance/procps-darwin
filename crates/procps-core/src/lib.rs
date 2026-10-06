@@ -13,7 +13,7 @@ mod source;
 mod summary;
 
 pub use field::Field;
-pub use linux::{LinuxPolicy, LinuxPriority, LinuxState};
+pub use linux::{LinuxPolicy, LinuxPriority, LinuxSizes, LinuxState};
 pub use request::{FieldGroup, SnapshotRequest};
 pub use snapshot::{Process, Snapshot, System, Usage};
 pub use source::{FixtureSource, LocalSource, ProcessSource, SourceError};

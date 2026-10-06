@@ -139,3 +139,52 @@ each processor:
 
 Darwin's tick counters are 32 bits wide and wrap, so each difference is taken
 modulo 2³².
+
+## Process sizes
+
+procps-ng computes `ps`'s size columns from `/proc/<pid>/stat`,
+`/proc/<pid>/status` and `/proc/<pid>/smaps_rollup`. The tools use these Darwin
+sources:
+
+| Column      | Linux source                                    | Darwin source                                                  |
+| ----------- | ----------------------------------------------- | -------------------------------------------------------------- |
+| `vsz`, `sz` | `VmSize`                                        | `pti_virtual_size` from `PROC_PIDTASKINFO`                     |
+| `rss`       | `VmRSS`                                         | `pti_resident_size` from `PROC_PIDTASKINFO`                    |
+| `trs`       | the code segment, `end_code` minus `start_code` | the executable regions that are not submaps                    |
+| `drs`       | the virtual size minus the code segment         | the virtual size minus `trs`                                   |
+| `size`      | `VmData` plus `VmStk`                           | the private writable regions that are not submaps              |
+| `uss`       | private clean and dirty pages in `smaps_rollup` | the private resident pages of the regions that are not submaps |
+| `pss`       | `Pss` in `smaps_rollup`                         | none, so `-`                                                   |
+
+Linux's code segment is the main executable's text. Darwin does not report the
+segment's bounds, so `trs` counts every executable region of the process except
+the submaps, which contain the shared cache of system libraries. It therefore
+includes the text of libraries outside the shared cache and of generated code.
+
+Linux's `VmData` counts only private writable mappings, so `size` leaves out the
+regions that Darwin reports as shared.
+
+On Darwin, the virtual size of a process includes the shared cache and large
+reservations of address space, so `vsz`, `sz` and `drs` are much larger than on
+Linux, as they are in Apple's `ps`.
+
+The columns that come from regions, `trs`, `drs`, `size` and `uss`, need a walk
+of the memory regions. The walk is slow, and only the helper can do it for
+another user's process. Darwin does not report how many processes share each
+resident page, so the tools cannot compute a proportional set size, and `pss`
+shows `-`.
+
+## Command names
+
+Linux keeps 15 bytes of a process's command name, and `pgrep` warns when a
+pattern without `-f` is longer than that, because the pattern cannot match.
+Darwin keeps 16 bytes in `p_comm`. The tools cut `p_comm` to 15 bytes, at a
+character boundary, so `ps`'s `comm` column, `pgrep`'s matching and its warning
+behave as on Linux.
+
+## `kernel_task`
+
+`kernel_task` has process ID 0, and even root cannot read its executable path,
+its command line or its memory regions. Its `exe` column therefore shows `-`,
+its command line shows `[kernel_task]` as for a Linux kernel thread, and the
+region columns show `-`.

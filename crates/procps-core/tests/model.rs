@@ -27,6 +27,15 @@ fn only_an_available_field_has_a_value(#[case] field: Field<i32>, #[case] expect
     assert_eq!(field.available(), expected);
 }
 
+#[rstest]
+#[case::available(Field::Available(String::from("a")), Field::Available("a"))]
+#[case::denied(Field::Denied, Field::Denied)]
+#[case::unsupported(Field::Unsupported, Field::Unsupported)]
+#[case::failed(Field::Failed, Field::Failed)]
+fn a_field_can_be_borrowed(#[case] field: Field<String>, #[case] expected: Field<&str>) {
+    assert_eq!(field.as_ref().map(String::as_str), expected);
+}
+
 #[test]
 fn a_default_request_reads_the_identity_of_every_process() {
     let request = SnapshotRequest::default();
