@@ -15,7 +15,7 @@ use std::{
 use darwin_proc::{Pid, ProcessInfo};
 use pretty_assertions::assert_eq;
 use procps_core::{
-    Field, FieldGroup, FixtureSource, LocalSource, Process, ProcessSource, Snapshot,
+    Field, FieldGroup, FixtureSource, LocalSource, Process, ProcessSource, RegionTotals, Snapshot,
     SnapshotRequest, Usage,
 };
 use rstest::rstest;
@@ -32,7 +32,8 @@ const fn outcome<T>(field: &Field<T>) -> &'static str {
 
 /// The outcome of each optional group of `process`, in [`FieldGroup::ALL`]
 /// order: `None` for a group that the source did not read. The usage group
-/// has the outcomes of its two fields, separated by a slash.
+/// has the outcomes of its three fields, and the regions group the outcomes of
+/// the totals and the regions, separated by slashes.
 fn outcomes(process: &Process) -> [Option<String>; 7] {
     fn one<T>(field: Option<&Field<T>>) -> Option<String> {
         field.map(|field| outcome(field).to_owned())
@@ -41,12 +42,22 @@ fn outcomes(process: &Process) -> [Option<String>; 7] {
     [
         one(process.arguments.as_ref()),
         one(process.environment.as_ref()),
-        process
-            .usage
-            .as_ref()
-            .map(|usage| format!("{}/{}", outcome(&usage.task), outcome(&usage.resources))),
+        process.usage.as_ref().map(|usage| {
+            format!(
+                "{}/{}/{}",
+                outcome(&usage.task),
+                outcome(&usage.resources),
+                outcome(&usage.counters)
+            )
+        }),
         one(process.threads.as_ref()),
-        one(process.regions.as_ref()),
+        match (&process.region_totals, &process.regions) {
+            (Some(totals), Some(regions)) => {
+                Some(format!("{}/{}", outcome(totals), outcome(regions)))
+            }
+            (None, None) => None,
+            (totals, regions) => Some(format!("{totals:?} with {regions:?}")),
+        },
         one(process.file_descriptors.as_ref()),
         one(process.working_directory.as_ref()),
     ]
@@ -55,7 +66,8 @@ fn outcomes(process: &Process) -> [Option<String>; 7] {
 /// `outcomes` for a process in which every group has the outcome `kind`.
 fn every_group(kind: &str) -> [Option<String>; 7] {
     let mut groups = [(); 7].map(|()| Some(kind.to_owned()));
-    groups[2] = Some(format!("{kind}/{kind}"));
+    groups[2] = Some(format!("{kind}/{kind}/{kind}"));
+    groups[4] = Some(format!("{kind}/{kind}"));
     groups
 }
 
@@ -80,13 +92,14 @@ fn fixture_process(pid: i32) -> Result<Process, darwin_proc::Error> {
         usage: Some(Usage {
             task: Field::Denied,
             resources: Field::Denied,
+            counters: Field::Denied,
         }),
         threads: Some(Field::Available(Vec::new())),
-        regions: Some(Field::Unsupported),
         file_descriptors: Some(Field::Available(vec![0, 1, 2])),
         working_directory: Some(Field::Available(PathBuf::from("/"))),
         ..Process::from_identity(info, Field::Unsupported, Field::Available(Pid::from(pid)))
-    })
+    }
+    .with_regions(Field::Unsupported))
 }
 
 #[test]
@@ -135,10 +148,40 @@ fn a_fixture_leaves_out_the_groups_that_the_request_did_not_ask_for()
             None,
             None,
             None,
-            Some("unsupported".to_owned()),
+            Some("unsupported/unsupported".to_owned()),
             None,
             None,
         ]]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_fixture_totals_regions_that_have_no_totals() -> Result<(), Box<dyn std::error::Error>> {
+    let regions = Pid::current().regions()?;
+    let process = Process {
+        regions: Some(Field::Available(regions.clone())),
+        ..Process::from_identity(
+            Pid::current().info()?,
+            Field::Unsupported,
+            Field::Unsupported,
+        )
+    };
+    let source = FixtureSource::new(SystemTime::UNIX_EPOCH, Duration::ZERO, vec![process]);
+    let request = SnapshotRequest::default().with(FieldGroup::Regions);
+    let totals: Vec<_> = source
+        .snapshot(&request)?
+        .processes
+        .into_iter()
+        .map(|process| process.region_totals)
+        .collect();
+
+    assert_eq!(
+        totals,
+        vec![Some(Field::Available(RegionTotals::from(
+            regions.as_slice()
+        )))]
     );
 
     Ok(())
@@ -259,7 +302,10 @@ fn a_zombie_keeps_its_resource_usage() -> Result<(), Box<dyn std::error::Error>>
         .map(|process| outcomes(process)[2].clone())
         .collect();
 
-    assert_eq!(usage, vec![Some("unsupported/available".to_owned())]);
+    assert_eq!(
+        usage,
+        vec![Some("unsupported/available/available".to_owned())]
+    );
 
     Ok(())
 }
@@ -393,7 +439,7 @@ fn a_fixture_reports_a_requested_group_that_it_lacks_as_unsupported()
         vec![[
             Some("unsupported".to_owned()),
             None,
-            Some("unsupported/unsupported".to_owned()),
+            Some("unsupported/unsupported/unsupported".to_owned()),
             None,
             None,
             None,

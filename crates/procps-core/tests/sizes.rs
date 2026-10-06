@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use darwin_proc::{Pid, Protection, Region, SchedulingPolicy, ShareMode, TaskInfo};
 use pretty_assertions::assert_eq;
-use procps_core::{Field, LinuxSizes, Process, Usage};
+use procps_core::{Field, LinuxSizes, Process, RegionTotals, Usage};
 use rstest::rstest;
 
 /// `VM_PROT_READ | VM_PROT_EXECUTE`.
@@ -90,13 +90,18 @@ fn process(
 ) -> Result<Process, darwin_proc::Error> {
     let info = Pid::current().info()?;
 
-    Ok(Process {
+    let process = Process {
         usage: task.map(|task| Usage {
             task,
             resources: Field::Denied,
+            counters: Field::Denied,
         }),
-        regions,
         ..Process::from_identity(info, Field::Unsupported, Field::Unsupported)
+    };
+
+    Ok(match regions {
+        Some(regions) => process.with_regions(regions),
+        None => process,
     })
 }
 
@@ -123,6 +128,55 @@ fn the_regions_and_the_task_give_every_size() -> Result<(), Box<dyn std::error::
             data: Some(Field::Available(9000)),
             data_and_stack: Some(Field::Available(300)),
             unique: Some(Field::Available(810)),
+            proportional: Some(Field::Unsupported),
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
+fn the_totals_leave_out_submaps_and_shared_regions() {
+    let regions = [
+        region(1000, CODE, false, 600),
+        region(5000, CODE, true, 0),
+        region(300, DATA, false, 200),
+        region(7000, DATA, true, 0),
+        region(70, READ_ONLY, false, 10),
+        shared_region(4000, DATA, false, 0, ShareMode::TrueShared),
+        shared_region(20, DATA, false, 0, ShareMode::CopyOnWrite),
+    ];
+
+    assert_eq!(
+        RegionTotals::from(regions.as_slice()),
+        RegionTotals {
+            executable: 1000,
+            private_writable: 320,
+        }
+    );
+}
+
+#[test]
+fn the_totals_give_trs_drs_and_size_without_the_regions() -> Result<(), Box<dyn std::error::Error>>
+{
+    let process = Process {
+        region_totals: Some(Field::Available(RegionTotals {
+            executable: 1000,
+            private_writable: 300,
+        })),
+        regions: Some(Field::Denied),
+        ..process(Some(Field::Available(task(10_000, 2000))), None)?
+    };
+
+    assert_eq!(
+        process.linux_sizes(),
+        LinuxSizes {
+            virtual_size: Some(Field::Available(10_000)),
+            resident: Some(Field::Available(2000)),
+            text: Some(Field::Available(1000)),
+            data: Some(Field::Available(9000)),
+            data_and_stack: Some(Field::Available(300)),
+            unique: Some(Field::Denied),
             proportional: Some(Field::Unsupported),
         }
     );

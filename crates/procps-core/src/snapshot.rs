@@ -10,8 +10,8 @@ use std::{
 };
 
 use darwin_proc::{
-    LoadAverage, Memory, Pid, ProcessInfo, ProcessorTicks, Region, ResourceUsage, Swap, TaskInfo,
-    TaskTotals, ThreadInfo,
+    LoadAverage, Memory, Pid, ProcessInfo, ProcessorTicks, Region, ResourceCounters, ResourceUsage,
+    ShareMode, Swap, TaskInfo, TaskTotals, ThreadInfo,
 };
 use serde::{Deserialize, Serialize};
 
@@ -55,7 +55,11 @@ pub struct Process {
     pub usage: Option<Usage>,
     /// The threads.
     pub threads: Option<Field<Vec<ThreadInfo>>>,
-    /// The memory regions, in address order.
+    /// The region totals. The helper sends them to every user.
+    pub region_totals: Option<Field<RegionTotals>>,
+    /// The memory regions, in address order. The helper sends them only to the
+    /// process's owner and to root. [`Process::with_regions`] sets them
+    /// together with their totals.
     pub regions: Option<Field<Vec<Region>>>,
     /// The open file descriptors, in ascending order.
     pub file_descriptors: Option<Field<Vec<RawFd>>>,
@@ -92,6 +96,7 @@ impl Process {
             environment: None,
             usage: None,
             threads: None,
+            region_totals: None,
             regions: None,
             file_descriptors: None,
             working_directory: None,
@@ -101,16 +106,25 @@ impl Process {
 
 impl Process {
     /// This process with exactly the groups that `request` asks for. A
-    /// requested group that the process lacks is unsupported.
+    /// requested group that the process lacks is unsupported. A process with
+    /// regions but no region totals gets the totals of its regions.
     pub(crate) fn limited_to(self, request: &SnapshotRequest) -> Self {
         fn group<T>(value: Option<T>, wanted: bool, missing: T) -> Option<T> {
             wanted.then(|| value.unwrap_or(missing))
         }
 
         let wants = |group| request.wants(group);
+        let region_totals = self.region_totals.or_else(|| {
+            self.regions.as_ref().map(|regions| {
+                regions
+                    .as_ref()
+                    .map(|regions| RegionTotals::from(regions.as_slice()))
+            })
+        });
         let unsupported = Usage {
             task: Field::Unsupported,
             resources: Field::Unsupported,
+            counters: Field::Unsupported,
         };
 
         Self {
@@ -126,6 +140,11 @@ impl Process {
             ),
             usage: group(self.usage, wants(FieldGroup::Usage), unsupported),
             threads: group(self.threads, wants(FieldGroup::Threads), Field::Unsupported),
+            region_totals: group(
+                region_totals,
+                wants(FieldGroup::Regions),
+                Field::Unsupported,
+            ),
             regions: group(self.regions, wants(FieldGroup::Regions), Field::Unsupported),
             file_descriptors: group(
                 self.file_descriptors,
@@ -142,15 +161,105 @@ impl Process {
     }
 }
 
-/// A process's CPU time, memory and I/O, from two calls that need the same
-/// permission. For a zombie, only `proc_pid_rusage` succeeds, and procps-ng
-/// shows a zombie's CPU time, so each call has its own field.
+impl Process {
+    /// This process with `regions` and their totals.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Field, Process, RegionTotals};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported)
+    ///     .with_regions(Field::Available(Vec::new()));
+    ///
+    /// assert_eq!(
+    ///     process.region_totals,
+    ///     Some(Field::Available(RegionTotals {
+    ///         executable: 0,
+    ///         private_writable: 0
+    ///     }))
+    /// );
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn with_regions(self, regions: Field<Vec<Region>>) -> Self {
+        Self {
+            region_totals: Some(
+                regions
+                    .as_ref()
+                    .map(|regions| RegionTotals::from(regions.as_slice())),
+            ),
+            regions: Some(regions),
+            ..self
+        }
+    }
+}
+
+/// The totals of a process's memory regions. procps-ng's `trs`, `drs` and
+/// `size` columns and `top`'s `CODE` and `DATA` fields use them. The regions
+/// that map a submap, such as the shared cache of system libraries, are left
+/// out.
+///
+/// ```
+/// use darwin_proc::Pid;
+/// use procps_core::RegionTotals;
+///
+/// let totals = RegionTotals::from(Pid::current().regions()?.as_slice());
+///
+/// assert!(totals.executable > 0);
+/// # Ok::<(), darwin_proc::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RegionTotals {
+    /// The size of the executable regions, which contain code.
+    pub executable: u64,
+    /// The size of the private writable regions, which contain data and
+    /// stacks. procps-ng's `size` is Linux's `VmData` plus `VmStk`, which count
+    /// only private writable mappings, so the regions that Darwin reports as
+    /// shared are left out.
+    pub private_writable: u64,
+}
+
+impl From<&[Region]> for RegionTotals {
+    fn from(regions: &[Region]) -> Self {
+        let outside_submaps = regions.iter().filter(|region| !region.is_submap);
+        let shared = |region: &Region| {
+            matches!(
+                region.share_mode,
+                ShareMode::Shared | ShareMode::TrueShared | ShareMode::SharedAliased
+            )
+        };
+
+        Self {
+            executable: outside_submaps
+                .clone()
+                .filter(|region| region.protection.is_executable())
+                .map(|region| region.size)
+                .sum(),
+            private_writable: outside_submaps
+                .filter(|region| region.protection.is_writable() && !shared(region))
+                .map(|region| region.size)
+                .sum(),
+        }
+    }
+}
+
+/// A process's CPU time, memory and I/O, from `PROC_PIDTASKINFO` and
+/// `proc_pid_rusage`, which need the same permission. For a zombie, only
+/// `proc_pid_rusage` succeeds, and procps-ng shows a zombie's CPU time, so each
+/// call has its own field. The result of `proc_pid_rusage` fills two fields, so
+/// that the helper can withhold the counters and still send the rest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     /// What `PROC_PIDTASKINFO` reports.
     pub task: Field<TaskInfo>,
-    /// What `proc_pid_rusage` reports.
+    /// The CPU time, wakeups, page-ins and memory sizes that
+    /// `proc_pid_rusage` reports.
     pub resources: Field<ResourceUsage>,
+    /// The disk I/O, instruction, cycle and energy counters that
+    /// `proc_pid_rusage` reports. The helper sends them only to the process's
+    /// owner and to root.
+    pub counters: Field<ResourceCounters>,
 }
 
 /// The system statistics for `top`'s summary area.

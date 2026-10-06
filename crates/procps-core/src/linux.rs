@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use darwin_proc::{Region, RunState, SchedulingPolicy, ShareMode, Status};
+use darwin_proc::{RunState, SchedulingPolicy, Status};
 
 use crate::{Field, Process};
 
@@ -370,20 +370,8 @@ impl Process {
     #[must_use]
     pub fn linux_sizes(&self) -> LinuxSizes {
         let task = self.usage.as_ref().map(|usage| usage.task);
-        let regions = self.regions.as_ref();
-        let sum = |keep: fn(&Region) -> bool, size: fn(&Region) -> u64| {
-            regions.map(|regions| {
-                regions
-                    .as_ref()
-                    .map(|regions| regions.iter().filter(|region| keep(region)).map(size).sum())
-            })
-        };
-        let outside_submaps = |region: &Region| !region.is_submap;
-
-        let text = sum(
-            |region| !region.is_submap && region.protection.is_executable(),
-            |region| region.size,
-        );
+        let totals = self.region_totals;
+        let text = totals.map(|totals| totals.map(|totals| totals.executable));
         let data = match (task, text) {
             (Some(task), Some(text)) => Some(match (task, text) {
                 (Field::Available(task), Field::Available(text)) => {
@@ -400,19 +388,17 @@ impl Process {
             resident: task.map(|task| task.map(|task| task.resident_size)),
             text,
             data,
-            data_and_stack: sum(
-                |region| {
-                    !region.is_submap
-                        && region.protection.is_writable()
-                        && !matches!(
-                            region.share_mode,
-                            ShareMode::Shared | ShareMode::TrueShared | ShareMode::SharedAliased
-                        )
-                },
-                |region| region.size,
-            ),
-            unique: sum(outside_submaps, |region| region.private_resident),
-            proportional: regions.map(|_| Field::Unsupported),
+            data_and_stack: totals.map(|totals| totals.map(|totals| totals.private_writable)),
+            unique: self.regions.as_ref().map(|regions| {
+                regions.as_ref().map(|regions| {
+                    regions
+                        .iter()
+                        .filter(|region| !region.is_submap)
+                        .map(|region| region.private_resident)
+                        .sum()
+                })
+            }),
+            proportional: totals.map(|_| Field::Unsupported),
         }
     }
 

@@ -221,10 +221,10 @@ buffer. Tests check each added struct's size against the SDK header.
 Each process record has its identity, which a source always reads, and field
 groups: arguments, environment, usage (CPU time, memory and I/O), threads,
 memory regions, file descriptors and working directory. Every value apart from
-the `kinfo_proc` record is a `Field<T>`, or for the usage group a pair of them.
-A `Field<T>` is available, denied, unsupported on macOS for that process, or
-failed for another reason. The formatter decides how each case is shown,
-following the compatibility rules.
+the `kinfo_proc` record is a `Field<T>`, or for the usage group three of them
+and for the regions group two. A `Field<T>` is available, denied, unsupported on
+macOS for that process, or failed for another reason. The formatter decides how
+each case is shown, following the compatibility rules.
 
 A `SnapshotRequest` lists the field groups that the caller needs.
 `ps -o pid,comm` therefore never reads arguments or walks memory regions, and
@@ -274,14 +274,15 @@ The access policy follows Linux procfs defaults (no `hidepid`):
   data and shared sizes. Linux exposes these through `/proc/<pid>/stat`,
   `status`, `cmdline` and `statm`, which every user can read.
 - Only root, or a caller whose user ID equals the target's real, effective and
-  saved user IDs while the target has not changed credentials since its last
-  `exec` (`PROC_FLAG_PSUGID` unset), may read the environment, working
-  directory, file descriptors, disk I/O byte counts, and the unique,
-  proportional and swapped sizes. Linux guards the equivalent files (`environ`,
-  `cwd`, `fd`, `io`, `smaps`) with a ptrace read-access check, which this rule
-  models.
+  saved user IDs and whose group ID equals the target's real, effective and
+  saved group IDs, while the target does not have `P_SUGID` set, may read the
+  environment, working directory, file descriptors, disk I/O byte counts,
+  instruction, cycle and energy counters, and the memory regions. Linux guards
+  the equivalent files (`environ`, `cwd`, `io`, `maps`, `smaps_rollup`) with a
+  ptrace read-access check, and lets only the owner list `fd`. This rule models
+  the check.
 
-Task 3.2 decides where each Darwin extension field falls.
+Task 3.2 records where each Darwin extension field falls.
 
 ### Other implementation choices
 
@@ -485,10 +486,11 @@ calls return a `kern_return_t`, which `Error::Mach` reports.
 CPU time and memory form one `Usage` group, because both come from
 `PROC_PIDTASKINFO` and `proc_pid_rusage`, which need the same permission. For a
 zombie only `proc_pid_rusage` succeeds, and procps-ng shows a zombie's CPU time,
-so the group keeps a separate `Field` for each call. To let `top` measure the
-interval between two snapshots, a snapshot also records the time since boot from
-`mach_continuous_time`. Unlike the wall clock, which can be set backwards, the
-time since boot never decreases.
+so the group keeps a separate `Field` for each call. Task 3.2 splits the result
+of `proc_pid_rusage` into two fields, so the group has three. To let `top`
+measure the interval between two snapshots, a snapshot also records the time
+since boot from `mach_continuous_time`. Unlike the wall clock, which can be set
+backwards, the time since boot never decreases.
 
 #### 2.2 Sources (done)
 
@@ -555,21 +557,69 @@ a body encoded with `postcard`. The tools and the helper are built together, so
 the protocol has one version and no negotiation. A receiver checks the version
 before it decodes the body, because `postcard`'s encoding does not describe
 itself. `VERSION` must increase whenever the encoding changes. A test compares
-fixed messages, which use every enum variant, with their version 1 encoding. It
-fails when a field or variant is added, removed or moved, but not when an enum
-variant is added at the end. When the versions differ, the helper replies with a
-refusal whose header has the helper's version. A request body can have at most 1
-MiB, and a response body at most 256 MiB. The receiver checks the length before
-it reads the body, and the body's buffer grows only as the bytes arrive.
+fixed messages, which use every enum variant, with their encoding in the current
+version. It fails when a field or variant is added, removed or moved, but not
+when an enum variant is added at the end. When the versions differ, the helper
+replies with a refusal whose header has the helper's version. A request body can
+have at most 1 MiB, and a response body at most 256 MiB. The receiver checks the
+length before it reads the body, and the body's buffer grows only as the bytes
+arrive.
 
-#### 3.2 Access policy
+#### 3.2 Access policy (done)
 
 The rules under Architecture, including a decision for each Darwin extension
-field. Tests inject caller credentials and a `FixtureSource`. The `Usage` group
-includes the numbers of bytes that a process has read from and written to disk.
-Linux lets only a process's owner read those counts in `/proc/<pid>/io`. The
-policy can let any user read the CPU time and memory in the group, so it has to
-withhold the disk counts separately.
+field. `helper::Caller` contains the user and group IDs from `getpeereid`.
+`Caller::redact` replaces each private value that the caller may not read with
+`Field::Denied`. XNU sets `P_SUGID` when a process changes its credentials or
+executes a set-user-ID or set-group-ID program, and clears it when the process
+executes another program. Linux makes a process that has done either of the
+first two things not dumpable.
+
+Linux also lets a process read its own private values. The helper does not,
+because it knows the client's process ID only from when the client connected. A
+client could pass the connection to a child and then execute a setuid program,
+and the exception would then give the child the setuid program's private values.
+A setuid-root client passes as root, so the difference affects only clients that
+fail the check for themselves: those with mixed IDs or with `P_SUGID` set.
+
+The source reads a process's credentials before its private values, and the
+process can execute a set-user-ID program, or exit and have its process ID
+reused, in between. `Caller::redact` therefore reads the identities again after
+the snapshot, and passes on private values only if the caller may read the
+process at both readings and its start time is the same. A set-user-ID program
+that resets all its IDs to the user's and then executes another program between
+the two readings leaves the process looking unchanged, because that exec clears
+`P_SUGID`. Task 3.6 will document that limit.
+
+`proc_pid_rusage` returns the disk I/O counts with the CPU time and memory, so
+`darwin-proc` splits the disk I/O counts, with the instruction, cycle and energy
+counters, into `ResourceCounters`, which only the owner and root may read. The
+disk counts correspond to `/proc/<pid>/io`. Linux has no cumulative per-process
+instruction or cycle count, and opening a performance counter for a process
+needs a ptrace read-access check. Linux has no per-process energy count. The
+rest of `ResourceUsage` goes to every user. The runnable time, which includes
+the running time, corresponds to `sum_exec_runtime` plus `run_delay` in
+`/proc/<pid>/schedstat`, and the wired size, footprint and page-ins to the sizes
+and faults in `status` and `stat`. The wakeups have no Linux counterpart, and
+reveal no more than the CPU time.
+
+The memory regions go only to the owner and root, as `maps` and `smaps_rollup`
+do on Linux. `RegionTotals` goes to every user, as the text and data sizes in
+`statm` do. `top`'s `CODE` and `DATA` fields and `ps`'s `size` use the totals.
+`ps`'s `trs` and `drs` come from `start_code` and `end_code` in
+`/proc/<pid>/stat`, which Linux hides from a caller that fails the ptrace
+read-access check. For such a process, procps-ng shows `trs` as 0 and `drs` as
+the whole virtual size. Task 5.4 applies `Caller::may_read_private` to reproduce
+that output.
+
+The `PROC_PIDTASKINFO` counters go to every user. The faults, page-ins and
+context switches correspond to counts in `stat` and `status`. Linux has no
+per-process count of Mach messages or system calls, and those counts reveal no
+more than the CPU time. Thread names, states and priorities go to every user, as
+`/proc/<pid>/task` does. The executable path and the session go to every user,
+because macOS gives them to every user without the helper. Linux guards
+`/proc/<pid>/exe` with the ptrace read-access check, so task 5.4 shows `-` in
+`ps`'s `exe` column where Linux would.
 
 #### 3.3 Daemon
 
@@ -599,7 +649,8 @@ and install and uninstall instructions for users without nix-darwin.
 
 `docs/helper-security.md` covering untrusted local clients, denial of service
 through expensive requests, information disclosure under the access policy, pid
-reuse, and spoofed sockets.
+reuse, processes that change their credentials while the helper reads them, and
+spoofed sockets.
 
 ### Phase 4: pgrep and pkill
 
@@ -661,10 +712,12 @@ Format lists, custom headers (`=`), widths (`:`), sorting (`--sort`, `k`),
 #### 5.4 Format specifiers
 
 All 153 specifiers, grouped by data source as in the appendix, plus the Darwin
-extensions. Candidate extensions: physical footprint, peak footprint, energy,
-instructions, cycles, wired memory, context switches, CPU architecture, and
-whether the process runs under Rosetta. Final names are chosen under
-compatibility rule 5.
+extensions. For a process whose private values the caller may not read, by the
+rule in `Caller::may_read_private`, `trs` is 0, `drs` is the virtual size and
+`exe` is `-`, as on Linux. Candidate extensions: physical footprint, peak
+footprint, energy, instructions, cycles, wired memory, context switches, CPU
+architecture, and whether the process runs under Rosetta. Final names are chosen
+under compatibility rule 5.
 
 #### 5.5 Threads and forest
 
