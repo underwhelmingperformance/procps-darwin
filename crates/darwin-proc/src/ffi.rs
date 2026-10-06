@@ -324,6 +324,9 @@ pub const P_WEXIT: c_int = 0x2000;
 pub const P_EXEC: c_int = 0x4000;
 pub const P_TRANSLATED: c_int = 0x20000;
 
+pub const AFORK: c_ushort = 0x1;
+pub const ASU: c_ushort = 0x2;
+
 pub const EPROC_SLEADER: i32 = 0x2;
 
 #[cfg(test)]
