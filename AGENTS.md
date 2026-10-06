@@ -48,6 +48,11 @@ exporter.
   For a file that cannot contain comments, such as JSON, add an entry to
   `REUSE.toml`. `nix flake check` runs `reuse lint`.
 
+- Files that a tool generates, such as `Cargo.lock` and `flake.lock`, have no
+  copyright holder. List them in the generated-files entry of `REUSE.toml`,
+  which sets `SPDX-FileCopyrightText = "NONE"` and CC0-1.0, and never annotate
+  them with our copyright.
+
 - procps-ng is GPL-2.0-or-later, so its code can be translated into this
   project. Check each file's licence header first: GPL-2.0-only code cannot be
   ported.
