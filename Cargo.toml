@@ -20,6 +20,20 @@ keywords = ["procps", "ps", "top", "pgrep", "macos"]
 categories = ["command-line-utilities", "os::macos-apis"]
 publish = false
 
+[workspace.dependencies]
+assert_matches = "1.5.0"
+clap = { version = "4.6.7", features = ["derive"] }
+libtest-mimic = "0.8.2"
+pretty_assertions = "1.4.1"
+procps-harness = { path = "crates/procps-harness" }
+regex = "1.13.1"
+rstest = "0.27.0"
+rustix = { version = "1.1.5", features = ["process"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+toml = "1.1.6"
+
 [workspace.lints.rust]
 missing_docs = "warn"
 # Only darwin-proc may contain `unsafe` code. When it does, it opts out at its
