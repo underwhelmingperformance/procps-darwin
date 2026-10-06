@@ -156,8 +156,17 @@ exporter.
 - Assert on whole values (records, slices, output strings), so a field that
   changes or goes missing shows up in the failure.
 - The procps-ng reference harness is the oracle for option parsing, error
-  messages, exit codes and output layout. Add a harness scenario for each
-  behaviour that procps-ng defines.
+  messages, exit codes and output layout. Add a scenario for each behaviour that
+  procps-ng defines, in `crates/procps-harness/scenarios/<tool>/`, then run
+  `nix develop -c just harness-generate`, which needs Docker, and commit the
+  golden file that it writes. Mark a scenario `pending = true` until the tool
+  matches procps-ng; the `reference` test in the `procps` package fails when a
+  pending scenario starts to match, so remove the mark then.
+- Each scenario runs in its own session, and its command must select only
+  processes in that session, with `pgrep -s 0`, `ps -p {a1}` or a similar
+  option. Scenarios then run in parallel without seeing each other's fixtures.
+  Generation rejects a scenario whose outcome changes when processes with the
+  fixtures' names run outside the session.
 
 ## Development environment
 

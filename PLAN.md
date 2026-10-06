@@ -346,17 +346,49 @@ and checks it with clippy, the tests, the documentation build, `cargo deny`,
 allows only licences that a dependency needs and that are compatible with
 GPL-3.0-or-later. CI runs the flake checks on macOS.
 
-#### 0.3 procps-ng reference harness
+#### 0.3 procps-ng reference harness (done)
 
-A container image (OrbStack and Docker are available) that builds procps-ng
-4.0.7 from the release tag, and a script that runs a scenario in it and captures
-standard output, standard error and the exit status. A scenario starts processes
-with known attributes, runs commands, and masks volatile values such as pids and
-times. The same scenario runs on macOS against this project's binaries, and a
-test compares the two results. Done when one `pgrep` scenario and one `ps`
-scenario pass through the harness. crane's `cleanCargoSource` keeps only Rust
-sources and manifests, so the flake's source must be extended to include the
-golden files before the flake checks can run these tests.
+`crates/procps-harness` runs reference scenarios. A scenario in
+`scenarios/<tool>/<name>.toml` declares fixture processes with known names and
+one command. The harness records the exit status, standard output and standard
+error, and whether each fixture is still running, was killed or was stopped, so
+`pkill` scenarios can check which processes received a signal. Each pid in the
+output is replaced by its name: a fixture's name, `{session}` or `{command}`.
+
+Each run starts a session leader with `setsid`, and the leader starts the
+fixtures and then the command, so all of them are in one new session. The
+command selects only processes in that session, for example with `pgrep -s 0`.
+The runner also starts a decoy for each fixture, with the same name, outside the
+session. A command that signals a decoy fails the run, and generation runs each
+scenario with and without decoys and rejects it if the outcomes differ. Runs are
+therefore independent, and the tests run them in parallel. When the leader
+exits, or a timeout passes, the runner kills every process left in the session.
+
+Output that depends on processes outside the session, such as `ps -e`, bare `ps`
+and the summary area of `top`, cannot be checked this way; it belongs in
+`FixtureSource` tests, or in a later harness feature that keeps only the
+session's rows.
+
+Masking replaces a pid with a name but leaves the spaces before it, so the
+harness gives every masked process a five-digit pid. It starts processes until
+the pid counter reaches 10000, and restarts a run whose pids fall outside 10000
+to 99999 or are out of order.
+
+`just harness-generate` runs every scenario against procps-ng 4.0.7 from
+nixpkgs, built with procps-ng's default `top`, in a `nixos/nix` container. The
+container presents a `pid_max` of 100000, which matches Darwin's pid range, and
+runs each scenario's processes as `nobody`. It writes
+`golden/<tool>/<name>.toml` and removes golden files that no scenario has. The
+`reference` test in the `procps` package runs the same scenarios against this
+project's binaries, one test per scenario, and compares the results with the
+golden files. A scenario marked `pending` is expected to differ until its tool
+is implemented. Its test fails when the scenario matches, so that the mark is
+removed.
+
+The golden files are TOML, which crane's `cleanCargoSource` keeps, so the flake
+checks run the comparison too. The first two scenarios, `pgrep` by name and
+`ps -o pid=,comm=`, are pending until phases 4 and 5. User and group names, and
+uids, are not masked yet; the first `ps` scenario with user columns needs that.
 
 ### Phase 1: Darwin data layer (`darwin-proc`)
 
@@ -627,6 +659,8 @@ summary of `docs/mappings.md`.
   inspect them with the real binaries. Tests that need root run under `sudo` in
   CI; GitHub's macOS runners allow passwordless `sudo`. These tests need the
   live process table, so CI runs them in a step of their own, outside
+  `nix flake check`. The reference test also reads the live process table, but
+  each scenario selects only processes in its own session, so it runs inside
   `nix flake check`.
 - Helper tests cover the protocol, the access policy with injected credentials,
   and the transport on a temporary socket.
