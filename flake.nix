@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
 {
   description = "procps-ng's ps, top, pgrep and pkill for macOS";
 
@@ -31,6 +34,7 @@
         ./nix/base.nix
         ./nix/devshell.nix
         ./nix/git-hooks.nix
+        ./nix/reuse.nix
         ./nix/treefmt.nix
       ];
 

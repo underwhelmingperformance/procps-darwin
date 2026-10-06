@@ -1,0 +1,6 @@
+version = 1
+
+[[annotations]]
+path = ["flake.lock", "nix/wrapscallion/sources.json"]
+SPDX-FileCopyrightText = "2026 Iain Lane <iain@orangesquash.org.uk>"
+SPDX-License-Identifier = "GPL-3.0-or-later"

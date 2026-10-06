@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
 # wrapscallion commit message linter, packaged from GitHub release binaries.
 {
   fetchurl,

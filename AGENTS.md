@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
 # Agent rules
 
 ## Project
@@ -23,14 +29,24 @@ prose.
 - Record every approximation of a Linux concept in `docs/mappings.md`, with the
   Darwin source of the value.
 
-## Porting code
+## Licensing and provenance
 
+- Every file starts with `SPDX-FileCopyrightText` and `SPDX-License-Identifier`
+  headers, following the REUSE specification. Add them with
+  `reuse annotate --copyright "<holder>" --year <year> --license <id> <file>`.
+  For a file that cannot contain comments, such as JSON, add an entry to
+  `REUSE.toml`. `nix flake check` runs `reuse lint`.
 - procps-ng is GPL-2.0-or-later, so its code can be translated into this
   project. Check each file's licence header first: GPL-2.0-only code cannot be
   ported.
-- uutils/procps uses the MIT licence, and its code can be reused.
-- A file that contains translated or copied code keeps the original copyright
-  notices in its header, together with the path of the upstream file.
+- A file with code translated from procps-ng has an `SPDX-FileCopyrightText`
+  line for each copyright holder in the upstream file, in addition to ours, and
+  a comment with the upstream path and version, for example
+  `procps-ng v4.0.7 src/pgrep.c`. Its licence is `GPL-3.0-or-later`.
+- uutils/procps uses the MIT licence, and its code can be reused. A file with
+  code from it keeps the uutils copyright line and uses
+  `GPL-3.0-or-later AND MIT`. The first such file also needs
+  `reuse download MIT`, which adds `LICENSES/MIT.txt`.
 
 ## Architecture
 
