@@ -1,0 +1,9 @@
+{
+  "platforms": {
+    "aarch64-darwin": {
+      "hash": "sha256-QueYXr4d77/1gEU4JdFiORE9TjJA/CSZXEB1AAYcqE8=",
+      "url": "https://github.com/underwhelmingperformance/wrapscallion/releases/download/v0.2.2/wrapscallion-0.2.2-aarch64-apple-darwin"
+    }
+  },
+  "version": "0.2.2"
+}
