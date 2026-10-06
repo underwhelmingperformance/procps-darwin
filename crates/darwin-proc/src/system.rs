@@ -11,6 +11,7 @@ use std::{
 use crate::{
     Call, Error, ffi,
     sysctl::{page_size, sysctl_value, zeroed},
+    time::Timebase,
 };
 
 /// The system as a whole. Any user can read its statistics.
@@ -224,6 +225,34 @@ impl Host {
         Ok(SystemTime::UNIX_EPOCH
             + Duration::from_secs(boot.tv_sec.unsigned_abs())
             + Duration::from_micros(boot.tv_usec.unsigned_abs().into()))
+    }
+
+    /// The time since the system booted, including time asleep, from
+    /// `mach_continuous_time`. It never decreases, even when the clock is set,
+    /// so the difference between two readings is the time between them.
+    ///
+    /// ```
+    /// use darwin_proc::Host;
+    ///
+    /// assert!(Host::uptime()? <= Host::uptime()?);
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Os`] if `mach_timebase_info` fails.
+    #[tracing::instrument(level = "debug", err(level = "debug"))]
+    pub fn uptime() -> Result<Duration, Error> {
+        let timebase = Timebase::current().map_err(|source| Error::Os {
+            call: Call::Uptime,
+            source,
+        })?;
+
+        // SAFETY: `mach_continuous_time` takes no arguments and only returns a
+        // count.
+        let ticks = unsafe { ffi::mach_continuous_time() };
+
+        Ok(timebase.duration(ticks))
     }
 
     /// The load averages.

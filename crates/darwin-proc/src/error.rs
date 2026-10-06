@@ -47,6 +47,10 @@ pub enum Call {
     /// The `kern.boottime` sysctl.
     #[display("sysctl kern.boottime")]
     BootTime,
+    /// `mach_timebase_info`, which gives the ratio for converting
+    /// `mach_continuous_time` to a duration.
+    #[display("mach_timebase_info")]
+    Uptime,
     /// `getloadavg`.
     #[display("getloadavg")]
     LoadAverage,

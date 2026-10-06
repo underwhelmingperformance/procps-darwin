@@ -189,6 +189,10 @@ pub struct MachTimebaseInfo {
 }
 
 unsafe extern "C" {
+    /// `mach_continuous_time` from `<mach/mach_time.h>`, which the `libc` crate
+    /// does not declare.
+    pub fn mach_continuous_time() -> u64;
+
     /// `mach_timebase_info` from `<mach/mach_time.h>`.
     pub fn mach_timebase_info(info: *mut MachTimebaseInfo) -> libc::c_int;
 
