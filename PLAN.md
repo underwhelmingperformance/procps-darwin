@@ -420,11 +420,15 @@ also returns its first environment string. macOS returns the whole environment
 of an ad hoc signed program to any process of the same user. macOS 26, which CI
 uses, returns the environment of platform binaries too.
 
-#### 1.4 CPU, memory and threads
+#### 1.4 CPU, memory and threads (done)
 
-`PROC_PIDTASKINFO`, `proc_pid_rusage` with `RUSAGE_INFO_V6`, and per-thread data
-from `PROC_PIDLISTTHREADS` and `PROC_PIDTHREADID64INFO`, including run state,
-CPU usage, scheduling policy and thread name.
+`Pid::task_info` reads `PROC_PIDTASKINFO`, `Pid::resource_usage` reads
+`proc_pid_rusage` with `RUSAGE_INFO_V6`, and `Pid::threads` reads each thread
+with `PROC_PIDTHREADID64INFO`, using the IDs that the private
+`PROC_PIDLISTTHREADIDS` lists. `PROC_PIDTASKINFO` and `proc_pid_rusage` report
+CPU time in Mach absolute time, whose unit is 125/3 nanoseconds on Apple
+silicon, while `PROC_PIDTHREADID64INFO` reports nanoseconds. macOS reports 0 for
+every thread's sleep time.
 
 #### 1.5 Memory region walk
 
