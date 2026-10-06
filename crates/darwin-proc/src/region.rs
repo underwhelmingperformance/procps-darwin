@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{io, num::NonZeroU32, sync::OnceLock};
+use std::num::NonZeroU32;
 
 use crate::{
     Call, Error, Pid,
     ffi::{self, ProcRegionInfo},
     libproc::pid_info,
-    sysctl::sysctl_value,
+    sysctl::page_size,
 };
 
 /// One region of a process's virtual memory, from `proc_pidinfo` with
@@ -199,24 +199,6 @@ impl Region {
             is_shared: raw.pri_flags & ffi::PROC_REGION_SHARED != 0,
         }
     }
-}
-
-/// The caller's page size in bytes. It does not change, so the first
-/// successful read is cached.
-fn page_size() -> io::Result<u64> {
-    static PAGE_SIZE: OnceLock<u64> = OnceLock::new();
-
-    if let Some(&size) = PAGE_SIZE.get() {
-        return Ok(size);
-    }
-
-    let size = sysctl_value::<u64>(c"hw.pagesize")?;
-
-    if size == 0 {
-        return Err(io::Error::other("sysctl hw.pagesize returned 0"));
-    }
-
-    Ok(*PAGE_SIZE.get_or_init(|| size))
 }
 
 impl Pid {
