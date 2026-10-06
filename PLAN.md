@@ -542,12 +542,25 @@ Implement and document in `docs/mappings.md`:
 
 ### Phase 3: privileged helper
 
-#### 3.1 Protocol
+#### 3.1 Protocol (done)
 
-Request and response types, version negotiation, framing and size limits, with
-round-trip tests. The `procps-core` records contain `darwin-proc` types, so this
-task either adds `serde` derives to `darwin-proc` behind a feature or defines
-wire types in the protocol module.
+Request and response types, a version check, framing and size limits, with
+round-trip tests. `darwin-proc` derives `serde`'s traits behind its `serde`
+feature, which `procps-core` enables, so `procps-core`'s records need no
+separate wire types. Paths use `serde`'s encoding of an `OsString`, because
+`serde` cannot serialise a `PathBuf` that is not valid UTF-8.
+
+A message is a big-endian `u16` protocol version, a big-endian `u32` length and
+a body encoded with `postcard`. The tools and the helper are built together, so
+the protocol has one version and no negotiation. A receiver checks the version
+before it decodes the body, because `postcard`'s encoding does not describe
+itself. `VERSION` must increase whenever the encoding changes. A test compares
+fixed messages, which use every enum variant, with their version 1 encoding. It
+fails when a field or variant is added, removed or moved, but not when an enum
+variant is added at the end. When the versions differ, the helper replies with a
+refusal whose header has the helper's version. A request body can have at most 1
+MiB, and a response body at most 256 MiB. The receiver checks the length before
+it reads the body, and the body's buffer grows only as the bytes arrive.
 
 #### 3.2 Access policy
 
@@ -562,12 +575,20 @@ withhold the disk counts separately.
 
 Socket activation, `getpeereid`, request handling through `LocalSource`, time
 limits, idle exit and logging. An integration test runs the daemon unprivileged
-on a temporary socket to exercise the transport.
+on a temporary socket to exercise the transport. The time limit covers the whole
+connection, so a tool that sends its request one byte at a time cannot keep the
+connection open beyond the time limit. The daemon replies with a `Refusal` when
+it cannot take the snapshot, runs out of time, or would send a response larger
+than the limit.
 
 #### 3.4 Client
 
 `HelperSource`, source selection at start-up, the root peer check and the
-override variable.
+override variable. A tool reads process data itself after any refusal or
+protocol error. When a request has another version or is too large, the helper
+sends the refusal and closes the connection without reading the rest of the
+request, so a tool that is still writing gets `BrokenPipe` from the write before
+it reads the refusal.
 
 #### 3.5 Packaging
 

@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use darwin_proc::Pid;
+use serde::{Deserialize, Serialize};
 
 /// A group of per-process values that a source reads together.
 ///
@@ -12,7 +13,7 @@ use darwin_proc::Pid;
 /// executable path and the session. Each group adds the values from one or
 /// more further calls. Some of these calls are slow, and some need permission
 /// that the caller may not have.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum FieldGroup {
     /// The command line, from `KERN_PROCARGS2`.
     Arguments,
@@ -54,7 +55,7 @@ impl FieldGroup {
 }
 
 /// The processes that a request covers.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 enum Selection {
     /// Every process.
     #[default]
@@ -80,7 +81,7 @@ enum Selection {
 ///
 /// assert!(request.wants(FieldGroup::Arguments) && !request.selects(Pid::from(2)));
 /// ```
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotRequest {
     groups: BTreeSet<FieldGroup>,
     selection: Selection,

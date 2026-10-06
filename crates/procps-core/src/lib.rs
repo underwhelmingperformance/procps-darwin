@@ -6,7 +6,9 @@
 //! `top`, `pgrep` and `pkill` share.
 
 mod field;
+pub mod helper;
 mod linux;
+mod path_field;
 mod request;
 mod snapshot;
 mod source;

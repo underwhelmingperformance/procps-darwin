@@ -12,6 +12,7 @@ use crate::{
 /// One thread of a process, from `proc_pidinfo` with
 /// `PROC_PIDTHREADID64INFO`.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ThreadInfo {
     /// The 64-bit thread ID, which is unique across the system.
     pub id: u64,
@@ -41,6 +42,7 @@ pub struct ThreadInfo {
 
 /// What a thread is doing, from `pth_run_state`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RunState {
     /// `TH_STATE_RUNNING`: running or runnable.
     Running,

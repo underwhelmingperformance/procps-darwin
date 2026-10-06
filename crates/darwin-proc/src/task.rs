@@ -18,6 +18,7 @@ use crate::{Call, Error, Pid, ffi, libproc::pid_info, time::Timebase};
 /// # Ok::<(), darwin_proc::Error>(())
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TaskInfo {
     /// The virtual memory size in bytes.
     pub virtual_size: u64,
@@ -56,6 +57,7 @@ pub struct TaskInfo {
 
 /// A Mach scheduling policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SchedulingPolicy {
     /// `POLICY_TIMESHARE`, the default.
     Timeshare,

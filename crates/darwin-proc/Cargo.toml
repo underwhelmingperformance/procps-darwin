@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 derive_more.workspace = true
 libc.workspace = true
+serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -30,3 +31,6 @@ pretty_assertions.workspace = true
 rstest.workspace = true
 rustix.workspace = true
 tempfile.workspace = true
+
+[features]
+serde = ["dep:serde"]

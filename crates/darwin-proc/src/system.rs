@@ -20,6 +20,7 @@ pub struct Host;
 
 /// The load averages over the last one, five and fifteen minutes.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LoadAverage {
     /// The average over the last minute.
     pub one_minute: f64,
@@ -32,6 +33,7 @@ pub struct LoadAverage {
 /// The system's physical memory, in bytes. `total` comes from `hw.memsize`
 /// and the other fields from `HOST_VM_INFO64`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Memory {
     /// The installed memory, from `hw.memsize`.
     pub total: u64,
@@ -63,6 +65,7 @@ pub struct Memory {
 
 /// The swap space, in bytes, from `vm.swapusage`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Swap {
     /// The size of the swap files.
     pub total: u64,
@@ -80,6 +83,7 @@ pub struct Swap {
 /// Darwin counts all user-mode time as `user`, whatever the thread's
 /// priority, and reports 0 for `nice`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ProcessorTicks {
     /// Running user code.
     pub user: u32,
@@ -94,6 +98,7 @@ pub struct ProcessorTicks {
 /// The numbers of tasks and threads in the system, from
 /// `PROCESSOR_SET_LOAD_INFO`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TaskTotals {
     /// The number of tasks, including `kernel_task`.
     pub tasks: usize,
