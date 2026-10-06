@@ -92,7 +92,10 @@ exporter.
 - Use private or `pub(crate)` visibility by default, and keep the public APIs of
   the library crates small. Every public item has a doc comment, and every
   public function and method has a doctest.
-- Use `cargo add` to add or change dependencies.
+- Every dependency is declared once, in `[workspace.dependencies]` in the root
+  `Cargo.toml`, and each crate refers to it with `workspace = true`. `cargo add`
+  cannot edit the workspace table, so add or change an entry there by hand, then
+  run `cargo add -p <crate> <dependency>`, which uses the workspace entry.
 
 ## Errors
 

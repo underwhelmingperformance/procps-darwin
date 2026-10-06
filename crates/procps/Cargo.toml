@@ -19,10 +19,10 @@ publish.workspace = true
 workspace = true
 
 [dev-dependencies]
-libtest-mimic = "0.8.2"
-pretty_assertions = "1.4.1"
-procps-harness = { path = "../procps-harness" }
-thiserror = "2.0.21"
+libtest-mimic.workspace = true
+pretty_assertions.workspace = true
+procps-harness.workspace = true
+thiserror.workspace = true
 
 # The reference test has its own `main`, so that its binary can also run as the
 # harness's session leader and fixture processes.
