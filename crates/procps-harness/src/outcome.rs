@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-    collections::BTreeMap, fmt, os::unix::process::ExitStatusExt, path::Path, process::Output,
+    collections::BTreeMap, os::unix::process::ExitStatusExt, path::Path, process::Output,
     str::FromStr,
 };
 
@@ -158,22 +158,15 @@ impl Outcome {
 }
 
 /// One of a command's output streams.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, derive_more::Display)]
 #[serde(rename_all = "kebab-case")]
 pub enum Stream {
     /// Standard output.
+    #[display("standard output")]
     Stdout,
     /// Standard error.
+    #[display("standard error")]
     Stderr,
-}
-
-impl fmt::Display for Stream {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Stdout => "standard output",
-            Self::Stderr => "standard error",
-        })
-    }
 }
 
 /// What had happened to a fixture by the time the command finished.
@@ -190,29 +183,22 @@ impl fmt::Display for Stream {
 /// assert_eq!(end.to_string(), "stopped by SIGSTOP");
 /// # Ok::<(), procps_harness::Error>(())
 /// ```
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, derive_more::Display)]
 #[serde(into = "String", try_from = "String")]
 pub enum FixtureEnd {
     /// The fixture was still running.
+    #[display("running")]
     Running,
     /// A signal, such as `SIGTERM`, had terminated the fixture.
+    #[display("killed by {_0}")]
     Killed(String),
     /// A signal, such as `SIGSTOP`, had stopped the fixture.
+    #[display("stopped by {_0}")]
     Stopped(String),
 }
 
 const KILLED_BY: &str = "killed by ";
 const STOPPED_BY: &str = "stopped by ";
-
-impl fmt::Display for FixtureEnd {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Running => formatter.write_str("running"),
-            Self::Killed(signal) => write!(formatter, "{KILLED_BY}{signal}"),
-            Self::Stopped(signal) => write!(formatter, "{STOPPED_BY}{signal}"),
-        }
-    }
-}
 
 impl FromStr for FixtureEnd {
     type Err = Error;
