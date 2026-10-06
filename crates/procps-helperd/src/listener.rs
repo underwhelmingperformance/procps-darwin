@@ -32,6 +32,10 @@ const MINIMUM_WAIT: Duration = Duration::from_millis(10);
 /// stops the helper, unless [`Listener::stuck_after`] replaces the threshold.
 const WATCHDOG_GRACE: Duration = Duration::from_secs(30);
 
+/// How long the listener runs before it returns at the next check that finds
+/// no open connection, unless [`Listener::lifetime`] replaces it.
+const LIFETIME: Duration = Duration::from_hours(1);
+
 /// How long the listener waits after a failed `accept`, such as when the
 /// helper has run out of file descriptors.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
@@ -92,6 +96,14 @@ impl Default for ConnectionLimits {
 /// launchd starts the helper again when the next connection arrives, so the
 /// helper does not need to keep running between uses.
 ///
+/// After it has run for its lifetime, the listener also returns at the next
+/// check that finds no open connection, even if it never stays idle for its
+/// idle time. It checks when a client connects, before it accepts the
+/// connection, and at least once a second. A connection that arrives as the
+/// listener returns waits in the socket for launchd to start the next helper.
+/// launchd opens the helper's log when it starts the helper, so the next helper
+/// writes to the new log that newsyslog created when it rotated the old one.
+///
 /// ```
 /// use std::time::{Duration, SystemTime};
 ///
@@ -109,6 +121,7 @@ pub struct Listener<S> {
     idle: Duration,
     connections: ConnectionLimits,
     stuck: Duration,
+    lifetime: Duration,
 }
 
 /// An error that stops the helper from accepting connections.
@@ -148,6 +161,7 @@ impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
             idle,
             connections,
             stuck,
+            lifetime: LIFETIME,
         }
     }
 
@@ -171,9 +185,29 @@ impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
         Self { stuck, ..self }
     }
 
+    /// This listener, which returns after it has run for `lifetime`, at the
+    /// next check that finds no open connection. The default is an hour.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use procps_core::LocalSource;
+    /// use procps_helperd::{ConnectionLimits, Listener, Server, TimeLimits};
+    ///
+    /// let server = Server::new(LocalSource, TimeLimits::default());
+    /// let listener = Listener::new(server, Duration::from_secs(60), ConnectionLimits::default())
+    ///     .lifetime(Duration::from_secs(600));
+    /// # let _ = listener;
+    /// ```
+    #[must_use]
+    pub fn lifetime(self, lifetime: Duration) -> Self {
+        Self { lifetime, ..self }
+    }
+
     /// Serves the connections on `socket`, and returns when the idle time has
     /// passed since it started or since its last connection closed, whichever
-    /// is later.
+    /// is later. After it has run for its lifetime, it also returns at the next
+    /// check that finds no open connection.
     ///
     /// A client that would exceed a connection limit gets
     /// [`Refusal::Busy`](procps_core::helper::Refusal::Busy).
@@ -212,15 +246,27 @@ impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
             tv_nsec: wait.subsec_nanos().into(),
         };
         let slots = Arc::new(Slots::new(self.connections));
+        let started = Instant::now();
 
         loop {
             let mut ready = [PollFd::new(socket, PollFlags::IN)];
 
-            match poll(&mut ready, Some(&wait)) {
-                Ok(0) => {}
-                Ok(_) => self.accept(socket, &slots),
+            let waiting = match poll(&mut ready, Some(&wait)) {
+                Ok(0) => false,
+                Ok(_) => true,
                 Err(rustix::io::Errno::INTR) => continue,
                 Err(error) => return Err(error.into()),
+            };
+
+            // Check before accepting. A listener that accepted first would
+            // always have an open connection here while clients keep arriving.
+            if slots.state().oldest().is_none() && started.elapsed() >= self.lifetime {
+                tracing::info!("stopping after the helper's lifetime");
+                return Ok(());
+            }
+
+            if waiting {
+                self.accept(socket, &slots);
             }
 
             let state = slots.state();

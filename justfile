@@ -30,5 +30,9 @@ reuse:
 harness-generate *ARGS:
     scripts/harness-generate "$@"
 
+helper-plist:
+    install -m 644 "$(nix build --no-link --print-out-paths .#helper-plist)" \
+      packaging/launchd/io.github.underwhelmingperformance.procps-helperd.plist
+
 check: clippy test doc deny audit reuse
     nix flake check

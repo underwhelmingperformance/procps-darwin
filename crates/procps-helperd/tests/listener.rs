@@ -11,7 +11,7 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use assert_matches::assert_matches;
@@ -125,6 +125,88 @@ fn a_slow_client_keeps_the_listener_running() -> Result<(), Box<dyn std::error::
     })?;
 
     assert_eq!(outcome, (true, Response::Refused(Refusal::TimedOut)));
+
+    Ok(())
+}
+
+#[test]
+fn the_listener_stops_after_its_lifetime_when_no_connection_is_open()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("socket");
+    let socket = UnixListener::bind(&path)?;
+    let lifetime = Duration::from_millis(50);
+    let listener =
+        listener(Duration::from_secs(3), Duration::from_secs(60), 256, 64).lifetime(lifetime);
+    // Send one byte of the header, so the slow request uses its whole 3-second
+    // time limit.
+    let mut slow = connect(&path)?;
+    slow.write_all(&VERSION.to_be_bytes()[..1])?;
+    let started = Instant::now();
+
+    let outcome = thread::scope(|scope| -> Result<_, Box<dyn std::error::Error>> {
+        let running = scope.spawn(|| listener.run(&socket));
+        // Connect after the lifetime has passed, while the slow request keeps
+        // the listener running, so the late request shows that the listener
+        // still accepts connections.
+        thread::sleep(Duration::from_millis(1500));
+        let mut late = connect(&path)?;
+        late.write_message(&Request::Snapshot(SnapshotRequest::default()))?;
+        let late_response = late.read_message::<Response>()?;
+        let running_while_served = !running.is_finished();
+        let slow_response = slow.read_message::<Response>()?;
+        running
+            .join()
+            .map_err(|_| "the listener thread panicked")??;
+
+        Ok((late_response, running_while_served, slow_response))
+    })?;
+
+    // The idle time is a minute, so only the lifetime can stop the listener
+    // this soon.
+    assert_eq!(
+        (outcome, started.elapsed() < Duration::from_secs(10)),
+        (
+            (
+                Response::Snapshot(Box::new(empty_snapshot())),
+                true,
+                Response::Refused(Refusal::TimedOut)
+            ),
+            true
+        )
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_listener_past_its_lifetime_leaves_a_new_connection_for_the_next_helper()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("socket");
+    let socket = UnixListener::bind(&path)?;
+    let lifetime = Duration::from_millis(50);
+    let listener =
+        listener(Duration::from_secs(1), Duration::from_secs(60), 256, 64).lifetime(lifetime);
+
+    thread::scope(|scope| -> Result<_, Box<dyn std::error::Error>> {
+        let running = scope.spawn(|| listener.run(&socket));
+        thread::sleep(lifetime * 2);
+        let mut client = connect(&path)?;
+        client.write_message(&Request::Snapshot(SnapshotRequest::default()))?;
+        running
+            .join()
+            .map_err(|_| "the listener thread panicked")??;
+
+        Ok(())
+    })?;
+
+    // The connection is still waiting, as it would for launchd to start the
+    // next helper.
+    socket.set_nonblocking(true)?;
+    let waiting = socket.accept().map(|_| ()).map_err(|error| error.kind());
+
+    assert_eq!(waiting, Ok(()));
 
     Ok(())
 }

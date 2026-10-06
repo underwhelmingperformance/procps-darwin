@@ -143,7 +143,8 @@ exporter.
   as an `EnvFilter` directive. The subscriber writes to standard error, in a
   pretty format on a terminal and as JSON otherwise. With the variable unset,
   the tools print only what procps-ng prints.
-- `procps-helperd` logs JSON to standard error, which launchd captures.
+- `procps-helperd` logs JSON to standard error, which launchd writes to
+  `/var/log/procps-helperd.log`.
 - Use `tracing-subscriber` only. Nothing collects OpenTelemetry traces, so leave
   out `tracing-opentelemetry`.
 
