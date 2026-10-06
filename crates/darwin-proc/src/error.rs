@@ -19,6 +19,10 @@ pub enum Call {
     /// `getsid`.
     #[display("getsid")]
     Session,
+    /// The `kern.procargs2` sysctl, which returns the arguments and
+    /// environment.
+    #[display("sysctl kern.procargs2")]
+    Arguments,
 }
 
 /// An error from reading process data.

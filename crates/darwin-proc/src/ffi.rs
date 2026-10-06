@@ -125,15 +125,6 @@ pub struct Vmspace {
     pub dummy4: [*mut c_char; 3],
 }
 
-impl KinfoProc {
-    /// A `kinfo_proc` with every field zero, for the kernel to fill.
-    pub fn zeroed() -> Self {
-        // SAFETY: every field is an integer, an array of integers or a raw
-        // pointer, and all-zero bytes are a valid value for each of them.
-        unsafe { std::mem::zeroed() }
-    }
-}
-
 pub const MAXCOMLEN: usize = 16;
 pub const NGROUPS: usize = 16;
 

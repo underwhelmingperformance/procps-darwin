@@ -11,6 +11,7 @@ use std::{
 use crate::{
     Call, Error, Pid, SignalSet,
     ffi::{self, KinfoProc},
+    sysctl::{sysctl, zeroed},
 };
 
 /// What `struct kinfo_proc` reports about a process. Any user can read it for
@@ -306,9 +307,9 @@ impl ProcessInfo {
         // still too small.
         loop {
             let mut size = 0;
-            sysctl(&mut mib, None, &mut size).map_err(table_error)?;
+            sysctl::<KinfoProc>(&mut mib, None, &mut size).map_err(table_error)?;
 
-            let mut table: Vec<KinfoProc> = std::iter::repeat_with(KinfoProc::zeroed)
+            let mut table: Vec<KinfoProc> = std::iter::repeat_with(zeroed::<KinfoProc>)
                 .take(size / size_of::<KinfoProc>() + 32)
                 .collect();
             let mut size = std::mem::size_of_val(table.as_slice());
@@ -353,7 +354,7 @@ impl Pid {
             libc::KERN_PROC_PID,
             self.as_raw(),
         ];
-        let mut kinfo = [KinfoProc::zeroed()];
+        let mut kinfo = [zeroed::<KinfoProc>()];
         let mut size = size_of::<KinfoProc>();
 
         sysctl(&mut mib, Some(&mut kinfo), &mut size)
@@ -377,41 +378,6 @@ fn table_error(source: io::Error) -> Error {
     }
 }
 
-/// Calls `sysctl` for `mib`. With `buffer`, the kernel fills it and sets
-/// `size` to the number of bytes that it wrote. Without a buffer, the kernel
-/// sets `size` to the number of bytes that it would write.
-fn sysctl(
-    mib: &mut [libc::c_int],
-    buffer: Option<&mut [KinfoProc]>,
-    size: &mut usize,
-) -> io::Result<()> {
-    let length = libc::c_uint::try_from(mib.len()).map_err(io::Error::other)?;
-    let pointer = buffer.map_or(std::ptr::null_mut(), |buffer| {
-        *size = (*size).min(std::mem::size_of_val(buffer));
-        buffer.as_mut_ptr().cast::<libc::c_void>()
-    });
-
-    // SAFETY: `mib` is valid for `length` integers. `pointer` is either null,
-    // which asks only for the size, or points to a buffer of at least `*size`
-    // bytes, because `*size` is clamped to the buffer's length above.
-    let result = unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            length,
-            pointer,
-            size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-
-    if result != 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, SystemTime};
@@ -423,11 +389,12 @@ mod tests {
     use crate::{
         Pid, SignalSet,
         ffi::{self, KinfoProc},
+        sysctl::zeroed,
     };
 
     /// A `kinfo_proc` with a value in every field that `ProcessInfo` reads.
     fn kinfo() -> KinfoProc {
-        let mut kinfo = KinfoProc::zeroed();
+        let mut kinfo = zeroed::<KinfoProc>();
         let proc = &mut kinfo.kp_proc;
         proc.p_pid = 4321;
         proc.p_stat = ffi::SSTOP;

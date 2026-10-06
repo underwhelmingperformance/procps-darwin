@@ -10,13 +10,16 @@
     reason = "this crate wraps the libproc, sysctl and Mach calls that the tools need"
 )]
 
+mod arguments;
 mod error;
 mod ffi;
 mod info;
 mod path;
 mod pid;
 mod signal_set;
+mod sysctl;
 
+pub use arguments::{Arguments, MalformedArguments};
 pub use error::{Call, Error};
 pub use info::{Credentials, ProcessFlags, ProcessInfo, Status, Terminal};
 pub use pid::Pid;
