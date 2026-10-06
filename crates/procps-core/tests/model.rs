@@ -36,6 +36,18 @@ fn a_field_can_be_borrowed(#[case] field: Field<String>, #[case] expected: Field
     assert_eq!(field.as_ref().map(String::as_str), expected);
 }
 
+#[rstest]
+#[case::available(Field::Available((1, 'a')), (Field::Available(1), Field::Available('a')))]
+#[case::denied(Field::Denied, (Field::Denied, Field::Denied))]
+#[case::unsupported(Field::Unsupported, (Field::Unsupported, Field::Unsupported))]
+#[case::failed(Field::Failed, (Field::Failed, Field::Failed))]
+fn a_field_of_a_pair_splits_into_two(
+    #[case] field: Field<(i32, char)>,
+    #[case] expected: (Field<i32>, Field<char>),
+) {
+    assert_eq!(field.unzip(), expected);
+}
+
 #[test]
 fn a_default_request_reads_the_identity_of_every_process() {
     let request = SnapshotRequest::default();

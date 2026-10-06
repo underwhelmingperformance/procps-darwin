@@ -91,3 +91,31 @@ impl<T> Field<T> {
         }
     }
 }
+
+impl<A, B> Field<(A, B)> {
+    /// Splits a field of a pair into a pair of fields with the same outcome.
+    ///
+    /// ```
+    /// use procps_core::Field;
+    ///
+    /// assert_eq!(
+    ///     (
+    ///         Field::Available((1, "one")).unzip(),
+    ///         Field::<(i32, &str)>::Denied.unzip()
+    ///     ),
+    ///     (
+    ///         (Field::Available(1), Field::Available("one")),
+    ///         (Field::Denied, Field::Denied)
+    ///     )
+    /// );
+    /// ```
+    #[must_use]
+    pub fn unzip(self) -> (Field<A>, Field<B>) {
+        match self {
+            Self::Available((a, b)) => (Field::Available(a), Field::Available(b)),
+            Self::Denied => (Field::Denied, Field::Denied),
+            Self::Unsupported => (Field::Unsupported, Field::Unsupported),
+            Self::Failed => (Field::Failed, Field::Failed),
+        }
+    }
+}

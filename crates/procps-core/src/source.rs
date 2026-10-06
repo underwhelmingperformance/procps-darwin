@@ -124,9 +124,12 @@ impl LocalSource {
         }
 
         if request.wants(FieldGroup::Usage) {
+            let (resources, counters) = field(pid, pid.resource_usage())?.unzip();
+
             process.usage = Some(Usage {
                 task: field(pid, pid.task_info())?,
-                resources: field(pid, pid.resource_usage())?,
+                resources,
+                counters,
             });
         }
 
@@ -135,7 +138,7 @@ impl LocalSource {
         }
 
         if request.wants(FieldGroup::Regions) {
-            process.regions = Some(field(pid, pid.regions())?);
+            process = process.with_regions(field(pid, pid.regions())?);
         }
 
         if request.wants(FieldGroup::FileDescriptors) {

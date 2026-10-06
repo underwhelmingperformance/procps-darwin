@@ -5,8 +5,10 @@
 //! The protocol between the tools and `procps-helperd`, the root helper that
 //! reads other users' process data.
 
+mod policy;
 mod protocol;
 
+pub use policy::Caller;
 pub use protocol::{
     Message, ProtocolError, ReadMessage, Refusal, Request, Response, VERSION, WriteMessage,
 };

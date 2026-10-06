@@ -11,12 +11,13 @@ use crate::{
     time::Timebase,
 };
 
-/// A process's resource usage, from `proc_pid_rusage` with `RUSAGE_INFO_V6`.
+/// A process's CPU time, wakeups, page-ins and memory sizes, from
+/// `proc_pid_rusage` with `RUSAGE_INFO_V6`.
 ///
 /// ```
 /// use darwin_proc::Pid;
 ///
-/// let usage = Pid::current().resource_usage()?;
+/// let (usage, _) = Pid::current().resource_usage()?;
 ///
 /// assert!(usage.physical_footprint > 0);
 /// # Ok::<(), darwin_proc::Error>(())
@@ -28,8 +29,8 @@ pub struct ResourceUsage {
     pub user_time: Duration,
     /// The system CPU time.
     pub system_time: Duration,
-    /// The time that the process's threads spent runnable but waiting for a
-    /// processor.
+    /// The time that the process's threads spent runnable, including the time
+    /// that they spent running.
     pub runnable_time: Duration,
     /// The number of wakeups from idle to run this process's threads.
     pub idle_wakeups: u64,
@@ -46,6 +47,27 @@ pub struct ResourceUsage {
     pub physical_footprint: u64,
     /// The largest physical footprint in bytes since the process started.
     pub peak_physical_footprint: u64,
+}
+
+/// A process's disk I/O, instruction, cycle and energy counters, from the same
+/// `proc_pid_rusage` call as its [`ResourceUsage`]. They are a separate type
+/// so that a caller can withhold them and still pass on the rest of the usage.
+///
+/// The counters accumulate from the start of the process, so a later read
+/// never reports less.
+///
+/// ```
+/// use darwin_proc::Pid;
+///
+/// let (_, before) = Pid::current().resource_usage()?;
+/// let (_, after) = Pid::current().resource_usage()?;
+///
+/// assert!(after.logical_writes >= before.logical_writes);
+/// # Ok::<(), darwin_proc::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ResourceCounters {
     /// The bytes read from disk.
     pub disk_bytes_read: u64,
     /// The bytes written to disk.
@@ -64,8 +86,8 @@ pub struct ResourceUsage {
 
 impl ResourceUsage {
     /// Decodes `raw`, whose times are in Mach absolute time.
-    pub(crate) fn decode(raw: &RusageInfoV6, timebase: Timebase) -> Self {
-        Self {
+    pub(crate) fn decode(raw: &RusageInfoV6, timebase: Timebase) -> (Self, ResourceCounters) {
+        let usage = Self {
             user_time: timebase.duration(raw.ri_user_time),
             system_time: timebase.duration(raw.ri_system_time),
             runnable_time: timebase.duration(raw.ri_runnable_time),
@@ -76,24 +98,28 @@ impl ResourceUsage {
             resident_size: raw.ri_resident_size,
             physical_footprint: raw.ri_phys_footprint,
             peak_physical_footprint: raw.ri_lifetime_max_phys_footprint,
+        };
+        let counters = ResourceCounters {
             disk_bytes_read: raw.ri_diskio_bytesread,
             disk_bytes_written: raw.ri_diskio_byteswritten,
             logical_writes: raw.ri_logical_writes,
             instructions: raw.ri_instructions,
             cycles: raw.ri_cycles,
             energy_nanojoules: raw.ri_energy_nj,
-        }
+        };
+
+        (usage, counters)
     }
 }
 
 impl Pid {
-    /// Reads the process's [`ResourceUsage`]. For a zombie, it reads the usage
-    /// at the time that the process exited.
+    /// Reads the process's [`ResourceUsage`] and [`ResourceCounters`]. For a
+    /// zombie, both contain the values from when the process exited.
     ///
     /// ```
     /// use darwin_proc::Pid;
     ///
-    /// let usage = Pid::current().resource_usage()?;
+    /// let (usage, _) = Pid::current().resource_usage()?;
     ///
     /// assert!(usage.peak_physical_footprint >= usage.physical_footprint);
     /// # Ok::<(), darwin_proc::Error>(())
@@ -105,7 +131,7 @@ impl Pid {
     /// [`Error::Denied`] for another user's process, or another error if
     /// `proc_pid_rusage` fails.
     #[tracing::instrument(level = "debug", err(level = "debug"))]
-    pub fn resource_usage(self) -> Result<ResourceUsage, Error> {
+    pub fn resource_usage(self) -> Result<(ResourceUsage, ResourceCounters), Error> {
         let mut raw = zeroed::<RusageInfoV6>();
 
         // SAFETY: the kernel writes a `rusage_info_v6` for `RUSAGE_INFO_V6`,
@@ -137,7 +163,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use super::ResourceUsage;
+    use super::{ResourceCounters, ResourceUsage};
     use crate::{ffi::RusageInfoV6, sysctl::zeroed, time::Timebase};
 
     #[test]
@@ -162,24 +188,28 @@ mod tests {
 
         assert_eq!(
             ResourceUsage::decode(&raw, Timebase::new(125, 3)),
-            ResourceUsage {
-                user_time: Duration::from_secs(1),
-                system_time: Duration::from_millis(100),
-                runnable_time: Duration::from_millis(10),
-                idle_wakeups: 1,
-                interrupt_wakeups: 2,
-                pageins: 3,
-                wired_size: 4,
-                resident_size: 5,
-                physical_footprint: 6,
-                peak_physical_footprint: 7,
-                disk_bytes_read: 8,
-                disk_bytes_written: 9,
-                logical_writes: 10,
-                instructions: 11,
-                cycles: 12,
-                energy_nanojoules: 13,
-            }
+            (
+                ResourceUsage {
+                    user_time: Duration::from_secs(1),
+                    system_time: Duration::from_millis(100),
+                    runnable_time: Duration::from_millis(10),
+                    idle_wakeups: 1,
+                    interrupt_wakeups: 2,
+                    pageins: 3,
+                    wired_size: 4,
+                    resident_size: 5,
+                    physical_footprint: 6,
+                    peak_physical_footprint: 7,
+                },
+                ResourceCounters {
+                    disk_bytes_read: 8,
+                    disk_bytes_written: 9,
+                    logical_writes: 10,
+                    instructions: 11,
+                    cycles: 12,
+                    energy_nanojoules: 13,
+                }
+            )
         );
     }
 }

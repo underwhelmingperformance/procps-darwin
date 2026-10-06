@@ -14,13 +14,14 @@ use std::{
 
 use darwin_proc::{
     AccountingFlags, Credentials, Gid, LoadAverage, Memory, Pid, ProcessFlags, ProcessInfo,
-    ProcessorTicks, Protection, Region, ResourceUsage, RunState, SchedulingPolicy, ShareMode,
-    SignalSet, Status, Swap, TaskInfo, TaskTotals, Terminal, ThreadInfo, Uid,
+    ProcessorTicks, Protection, Region, ResourceCounters, ResourceUsage, RunState,
+    SchedulingPolicy, ShareMode, SignalSet, Status, Swap, TaskInfo, TaskTotals, Terminal,
+    ThreadInfo, Uid,
 };
 use pretty_assertions::assert_eq;
 use procps_core::{
-    Field, FieldGroup, LocalSource, Process, ProcessSource, Snapshot, SnapshotRequest, System,
-    Usage,
+    Field, FieldGroup, LocalSource, Process, ProcessSource, RegionTotals, Snapshot,
+    SnapshotRequest, System, Usage,
     helper::{
         Message, ProtocolError, ReadMessage, Refusal, Request, Response, VERSION, WriteMessage,
     },
@@ -83,6 +84,7 @@ fn paths_and_arguments_need_not_be_utf8() -> Result<(), Box<dyn std::error::Erro
         usage: Some(Usage {
             task: Field::Unsupported,
             resources: Field::Failed,
+            counters: Field::Denied,
         }),
         working_directory: Some(Field::Available(PathBuf::from(bytes()))),
         ..Process::from_identity(
@@ -231,7 +233,8 @@ fn a_message_above_the_limit_is_not_sent() {
     );
 }
 
-// The fixtures from here on pin the encoding of version 1 of the protocol.
+// The fixtures from here on pin the encoding of the current version of the
+// protocol.
 // Together they use every enum variant, and within each struct, fields of the
 // same type have different values. Reordering variants or fields therefore
 // changes the frames of the fixed messages.
@@ -315,6 +318,12 @@ const fn fixed_resources() -> ResourceUsage {
         resident_size: 5,
         physical_footprint: 6,
         peak_physical_footprint: 7,
+    }
+}
+
+/// The disk I/O, instruction, cycle and energy counters of [`fixed_process`].
+const fn fixed_counters() -> ResourceCounters {
+    ResourceCounters {
         disk_bytes_read: 8,
         disk_bytes_written: 9,
         logical_writes: 10,
@@ -401,6 +410,8 @@ fn fixed_regions() -> Vec<Region> {
 }
 
 /// A process with every field group. Its fields use each variant of `Field`.
+/// The region totals are fixed values, so a change to how `RegionTotals` sums
+/// regions leaves the encoding unchanged.
 fn fixed_process() -> Process {
     Process {
         arguments: Some(Field::Available(vec![OsString::from("launchd")])),
@@ -408,8 +419,13 @@ fn fixed_process() -> Process {
         usage: Some(Usage {
             task: Field::Available(fixed_task()),
             resources: Field::Available(fixed_resources()),
+            counters: Field::Available(fixed_counters()),
         }),
         threads: Some(Field::Available(fixed_threads())),
+        region_totals: Some(Field::Available(RegionTotals {
+            executable: 14,
+            private_writable: 15,
+        })),
         regions: Some(Field::Available(fixed_regions())),
         file_descriptors: Some(Field::Failed),
         working_directory: Some(Field::Available(PathBuf::from("/"))),
@@ -504,56 +520,56 @@ fn hex<M: Message>(message: &M) -> String {
         .collect()
 }
 
-/// The frame of [`fixed_response`] in version 1 of the protocol.
-const RESPONSE_V1: &str = concat!(
-    "0001000003dc00e4f7c4d50600640006a00602a206018480808002a406f50300",
+/// The frame of [`fixed_response`] in the current version of the protocol.
+const RESPONSE: &str = concat!(
+    "0002000003e600e4f7c4d50600640006a00602a206018480808002a406f50300",
     "f60314151602170cfb1f01848001030180f7c4d506a0c21e076c61756e636864",
     "0180800100000d2f7362696e2f6c61756e6368640201000100076c61756e6368",
     "6401010100808080808020808080080180cab5ee010080e59a77000102030405",
-    "060708090a3e000180cab5ee010080e59a770080ade204010203040506070809",
-    "0a0b0c0d010006010080c2d72f0080dac409f403000000013e407e0874687265",
-    "61642031020080c2d72f0080dac409f403010100013e407e0874687265616420",
-    "32030080c2d72f0080dac409f403020200013e407e0874687265616420330400",
-    "80c2d72f0080dac409f403030e0300013e407e087468726561642034050080c2",
-    "d72f0080dac409f403000400013e407e087468726561642035060080c2d72f00",
-    "80dac409f40301051200013e407e087468726561642036010009808080801080",
-    "80010507000180608040802080108008800402014d0001808080802080800105",
-    "07010180608040802080108008800402014d0001808080803080800105070201",
-    "80608040802080108008800402014d0001808080804080800105070301806080",
-    "40802080108008800402014d0001808080805080800105070401806080408020",
-    "80108008800402014d0001808080806080800105070501806080408020801080",
-    "08800402014d0001808080807080800105070601806080408020801080088004",
-    "02014d0001808080808001808001050707018060804080208010800880040201",
-    "4d0001808080809001808001050708630180608040802080108008800402014d",
-    "00010103010000012fe80702ea07018480808002ec07f50300f6031415160217",
-    "0cfb1f00848001030180f7c4d506a0c21e076c61756e63686401808001010300",
-    "000000000000fc0702fe070184808080028008f50300f60314151602170cfb1f",
-    "02848001030180f7c4d506a0c21e076c61756e63686401808001010300000000",
-    "00000090080292080184808080029408f50300f60314151602170cfb1f038480",
-    "01030180f7c4d506a0c21e076c61756e63686401808001010300000000000000",
-    "a40802a608018480808002a808f50300f60314151602170cfb1f048480010301",
-    "80f7c4d506a0c21e076c61756e63686401808001010300000000000000b80802",
-    "ba08018480808002bc08f50300f60314151602170cfb1f05ff848001030180f7",
-    "c4d506a0c21e076c61756e636864018080010103000000000000000180f7c4d5",
-    "0600000000000000f83f000000000000f43f000000000000f03f808080804001",
-    "02030405060708090a0b80808080048080408080c0ff03010101020300d804b8",
-    "1702",
+    "060708090a3e000180cab5ee010080e59a770080ade204010203040506070008",
+    "090a0b0c0d010006010080c2d72f0080dac409f403000000013e407e08746872",
+    "6561642031020080c2d72f0080dac409f403010100013e407e08746872656164",
+    "2032030080c2d72f0080dac409f403020200013e407e08746872656164203304",
+    "0080c2d72f0080dac409f403030e0300013e407e087468726561642034050080",
+    "c2d72f0080dac409f403000400013e407e087468726561642035060080c2d72f",
+    "0080dac409f40301051200013e407e08746872656164203601000e0f01000980",
+    "808080108080010507000180608040802080108008800402014d000180808080",
+    "208080010507010180608040802080108008800402014d000180808080308080",
+    "010507020180608040802080108008800402014d000180808080408080010507",
+    "030180608040802080108008800402014d000180808080508080010507040180",
+    "608040802080108008800402014d000180808080608080010507050180608040",
+    "802080108008800402014d000180808080708080010507060180608040802080",
+    "108008800402014d000180808080800180800105070701806080408020801080",
+    "08800402014d0001808080809001808001050708630180608040802080108008",
+    "800402014d00010103010000012fe80702ea07018480808002ec07f50300f603",
+    "14151602170cfb1f00848001030180f7c4d506a0c21e076c61756e6368640180",
+    "800101030000000000000000fc0702fe070184808080028008f50300f6031415",
+    "1602170cfb1f02848001030180f7c4d506a0c21e076c61756e63686401808001",
+    "0103000000000000000090080292080184808080029408f50300f60314151602",
+    "170cfb1f03848001030180f7c4d506a0c21e076c61756e636864018080010103",
+    "0000000000000000a40802a608018480808002a808f50300f60314151602170c",
+    "fb1f04848001030180f7c4d506a0c21e076c61756e6368640180800101030000",
+    "000000000000b80802ba08018480808002bc08f50300f60314151602170cfb1f",
+    "05ff848001030180f7c4d506a0c21e076c61756e636864018080010103000000",
+    "00000000000180f7c4d50600000000000000f83f000000000000f43f00000000",
+    "0000f03f80808080400102030405060708090a0b80808080048080408080c0ff",
+    "03010101020300d804b81702",
 );
 
 #[rstest]
-#[case::request_for_identities(hex(&Request::Snapshot(SnapshotRequest::default())), "00010000000400000000")]
-#[case::request_for_everything(hex(&request_for_everything()), "000100000010000700010203040506010202be9a0c01")]
-#[case::response(hex(&fixed_response()), RESPONSE_V1)]
-#[case::version_refusal(hex(&Response::Refused(Refusal::Version)), "0001000000020100")]
-#[case::request_too_large_refusal(hex(&Response::Refused(Refusal::RequestTooLarge)), "0001000000020101")]
-#[case::malformed_refusal(hex(&Response::Refused(Refusal::Malformed)), "0001000000020102")]
-#[case::failed_refusal(hex(&Response::Refused(Refusal::Failed)), "0001000000020103")]
-#[case::timed_out_refusal(hex(&Response::Refused(Refusal::TimedOut)), "0001000000020104")]
-#[case::response_too_large_refusal(hex(&Response::Refused(Refusal::ResponseTooLarge)), "0001000000020105")]
-fn the_encoding_matches_protocol_version_1(#[case] frame: String, #[case] expected: &str) {
+#[case::request_for_identities(hex(&Request::Snapshot(SnapshotRequest::default())), "00020000000400000000")]
+#[case::request_for_everything(hex(&request_for_everything()), "000200000010000700010203040506010202be9a0c01")]
+#[case::response(hex(&fixed_response()), RESPONSE)]
+#[case::version_refusal(hex(&Response::Refused(Refusal::Version)), "0002000000020100")]
+#[case::request_too_large_refusal(hex(&Response::Refused(Refusal::RequestTooLarge)), "0002000000020101")]
+#[case::malformed_refusal(hex(&Response::Refused(Refusal::Malformed)), "0002000000020102")]
+#[case::failed_refusal(hex(&Response::Refused(Refusal::Failed)), "0002000000020103")]
+#[case::timed_out_refusal(hex(&Response::Refused(Refusal::TimedOut)), "0002000000020104")]
+#[case::response_too_large_refusal(hex(&Response::Refused(Refusal::ResponseTooLarge)), "0002000000020105")]
+fn the_encoding_matches_the_protocol_version(#[case] frame: String, #[case] expected: &str) {
     assert_eq!(
         (VERSION, frame.as_str()),
-        (1, expected),
+        (2, expected),
         "the encoding has changed: increase VERSION and replace the expected frames"
     );
 }

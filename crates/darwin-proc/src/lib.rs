@@ -34,7 +34,7 @@ pub use error::{Call, Error};
 pub use info::{AccountingFlags, Credentials, ProcessFlags, ProcessInfo, Status, Terminal};
 pub use pid::Pid;
 pub use region::{Protection, Region, ShareMode};
-pub use resource::ResourceUsage;
+pub use resource::{ResourceCounters, ResourceUsage};
 pub use signal_set::SignalSet;
 pub use system::{Host, LoadAverage, Memory, ProcessorTicks, Swap, TaskTotals};
 pub use task::{SchedulingPolicy, TaskInfo};

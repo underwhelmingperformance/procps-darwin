@@ -97,6 +97,7 @@ fn process(spec: Spec) -> Result<Process, darwin_proc::Error> {
         usage: spec.task.map(|task| Usage {
             task: Field::Available(task),
             resources: Field::Denied,
+            counters: Field::Denied,
         }),
         threads: spec
             .threads

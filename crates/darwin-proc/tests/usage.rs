@@ -71,7 +71,7 @@ fn the_task_its_usage_and_its_thread_agree_on_cpu_time() -> Result<(), Box<dyn s
     }
 
     let task = pid.task_info()?;
-    let usage = pid.resource_usage()?;
+    let (usage, _) = pid.resource_usage()?;
     let threads = pid.threads()?;
     let [thread] = threads.as_slice() else {
         return Err(format!("expected one thread, found {threads:?}").into());

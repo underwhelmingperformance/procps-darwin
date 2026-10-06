@@ -170,9 +170,26 @@ Linux, as they are in Apple's `ps`.
 
 The columns that come from regions, `trs`, `drs`, `size` and `uss`, need a walk
 of the memory regions. The walk is slow, and only the helper can do it for
-another user's process. Darwin does not report how many processes share each
-resident page, so the tools cannot compute a proportional set size, and `pss`
-shows `-`.
+another user's process. The helper sends the regions only to the owner and to
+root, in the same way that Linux lets only them read `smaps_rollup`, whose
+private clean and dirty sizes make up `uss`. It sends the executable and private
+writable totals to every user, in the same way that Linux lets every user read
+`VmData` and `VmStk` in `status`, which `size` uses, and the text and data sizes
+in `statm`, which `top` uses. Darwin does not report how many processes share
+each resident page, so the tools cannot compute a proportional set size, and
+`pss` shows `-`.
+
+Linux hides `start_code` and `end_code` in `/proc/<pid>/stat` from a caller that
+fails ptrace's read-access check, and procps-ng then shows `trs` as 0 and `drs`
+as the whole virtual size. `ps` will do the same for a process whose private
+values the caller may not read.
+
+## Executable path
+
+Linux guards `/proc/<pid>/exe` with ptrace's read-access check, so procps-ng's
+`exe` column shows `-` for a process that the caller may not read. macOS gives
+every user the path through `proc_pidpath`, and the helper passes it on, but
+`ps` will show `-` in the same cases as Linux.
 
 ## Command names
 

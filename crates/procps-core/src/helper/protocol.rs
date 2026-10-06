@@ -31,7 +31,7 @@ use crate::{Snapshot, SnapshotRequest};
 /// assert_eq!(wire[..2], VERSION.to_be_bytes());
 /// # Ok::<(), procps_core::helper::ProtocolError>(())
 /// ```
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 
 /// The size of a message's header, which contains the version and the length
 /// of the body.
