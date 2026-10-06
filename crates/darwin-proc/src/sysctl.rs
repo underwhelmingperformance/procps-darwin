@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{ffi::CStr, io};
+use std::{ffi::CStr, io, sync::OnceLock};
 
 use crate::ffi::{KinfoProc, ProcRegionInfo, RusageInfoV6};
 
@@ -38,6 +38,18 @@ unsafe impl Plain for libc::proc_vnodepathinfo {}
 
 // SAFETY: `proc_fdinfo` contains only integers.
 unsafe impl Plain for libc::proc_fdinfo {}
+
+// SAFETY: `timeval` contains only integers and padding.
+unsafe impl Plain for libc::timeval {}
+
+// SAFETY: `xsw_usage` contains only integers.
+unsafe impl Plain for libc::xsw_usage {}
+
+// SAFETY: `vm_statistics64` contains only integers.
+unsafe impl Plain for libc::vm_statistics64 {}
+
+// SAFETY: `processor_set_load_info` contains only integers.
+unsafe impl Plain for libc::processor_set_load_info {}
 
 // SAFETY: `proc_taskinfo` contains only integers.
 unsafe impl Plain for libc::proc_taskinfo {}
@@ -88,8 +100,8 @@ pub(crate) fn sysctl<T: Plain>(
 }
 
 /// Reads the sysctl `name`, whose value is a single `T`.
-pub(crate) fn sysctl_value<T: Plain + Default>(name: &CStr) -> io::Result<T> {
-    let mut value = T::default();
+pub(crate) fn sysctl_value<T: Plain>(name: &CStr) -> io::Result<T> {
+    let mut value = zeroed::<T>();
     let mut size = size_of::<T>();
 
     // SAFETY: `name` is a NUL-terminated string, and `value` has `size`
@@ -118,4 +130,22 @@ pub(crate) fn sysctl_value<T: Plain + Default>(name: &CStr) -> io::Result<T> {
     }
 
     Ok(value)
+}
+
+/// The caller's page size in bytes. It does not change, so the first
+/// successful read is cached.
+pub(crate) fn page_size() -> io::Result<u64> {
+    static PAGE_SIZE: OnceLock<u64> = OnceLock::new();
+
+    if let Some(&size) = PAGE_SIZE.get() {
+        return Ok(size);
+    }
+
+    let size = sysctl_value::<u64>(c"hw.pagesize")?;
+
+    if size == 0 {
+        return Err(io::Error::other("sysctl hw.pagesize returned 0"));
+    }
+
+    Ok(*PAGE_SIZE.get_or_init(|| size))
 }

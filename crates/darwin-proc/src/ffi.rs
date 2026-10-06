@@ -192,6 +192,35 @@ unsafe extern "C" {
     /// `mach_timebase_info` from `<mach/mach_time.h>`.
     pub fn mach_timebase_info(info: *mut MachTimebaseInfo) -> libc::c_int;
 
+    /// The port of the calling task, which the `mach_task_self()` macro in
+    /// `<mach/mach_init.h>` reads. The `libc` crate deprecates its declaration
+    /// in favour of the `mach2` crate.
+    pub static mach_task_self_: libc::mach_port_t;
+
+    /// `mach_host_self` from `<mach/mach_init.h>`. The `libc` crate
+    /// deprecates its declaration in favour of the `mach2` crate.
+    pub fn mach_host_self() -> libc::mach_port_t;
+
+    /// `processor_set_default` from `<mach/mach_host.h>`.
+    pub fn processor_set_default(
+        host: libc::mach_port_t,
+        default_set: *mut libc::mach_port_t,
+    ) -> libc::kern_return_t;
+
+    /// `processor_set_statistics` from `<mach/processor_set.h>`.
+    pub fn processor_set_statistics(
+        set: libc::mach_port_t,
+        flavor: libc::c_int,
+        info: *mut libc::integer_t,
+        count: *mut libc::mach_msg_type_number_t,
+    ) -> libc::kern_return_t;
+
+    /// `mach_port_deallocate` from `<mach/mach_port.h>`.
+    pub fn mach_port_deallocate(
+        task: libc::mach_port_t,
+        name: libc::mach_port_t,
+    ) -> libc::kern_return_t;
+
     /// `devname_r` from `<stdlib.h>`, which the `libc` crate does not declare.
     pub fn devname_r(
         dev: libc::dev_t,
@@ -232,6 +261,15 @@ pub struct ProcRegionInfo {
 }
 
 pub const PROC_PIDREGIONINFO: libc::c_int = 7;
+
+/// `PROCESSOR_SET_LOAD_INFO_COUNT` from `<mach/processor_info.h>`: the size of
+/// `processor_set_load_info` in integers.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the struct has 4 integers, and the count 4 fits in a mach_msg_type_number_t"
+)]
+pub const PROCESSOR_SET_LOAD_INFO_COUNT: libc::mach_msg_type_number_t =
+    (size_of::<libc::processor_set_load_info>() / size_of::<libc::integer_t>()) as _;
 
 pub const PROC_REGION_SUBMAP: u32 = 1;
 pub const PROC_REGION_SHARED: u32 = 2;

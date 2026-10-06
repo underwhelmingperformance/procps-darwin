@@ -462,10 +462,14 @@ processes. `Terminal::name` finds a terminal's name in `/dev` with `devname_r`.
 `getgrgid_r`, `getpwnam_r` and `getgrnam_r`. Each lookup is an IPC call to
 `opendirectoryd`, so `procps-core` should cache the names.
 
-#### 1.7 System statistics
+#### 1.7 System statistics (done)
 
-Load averages, boot time, memory and swap, per-CPU ticks, task and thread
-totals, and logged-in user count.
+`Host` reads the load averages with `getloadavg`, the boot time from
+`kern.boottime`, the memory from `hw.memsize` and `host_statistics64`, the swap
+space from `vm.swapusage`, each processor's ticks with `host_processor_info`,
+the task and thread totals with `processor_set_statistics`, and the number of
+login sessions from the login records. Any user can read all of them. The Mach
+calls return a `kern_return_t`, which `Error::Mach` reports.
 
 ### Phase 2: core model (`procps-core`)
 
@@ -495,6 +499,8 @@ Implement and document in `docs/mappings.md`:
 - Memory summary figures. Proposed: `buff/cache` is file-backed pages plus
   purgeable pages, which matches Activity Monitor's "Cached Files", and `avail`
   is free, speculative, file-backed and purgeable pages together.
+- CPU states: Darwin counts all user-mode time as user time and reports no nice
+  ticks, so `ni` shows `0.0` and `us` includes the time of niced processes.
 - Region-based sizes for `trs`, `drs`, `size` and `sz`: classify the regions
   from task 1.5 by protection, share mode, user tag and memory object, and
   decide how to count the shared cache and other submaps.

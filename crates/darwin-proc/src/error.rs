@@ -6,7 +6,7 @@ use std::io;
 
 use crate::Pid;
 
-/// A call that reads process data from the kernel.
+/// A call that reads process or system data from the kernel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, derive_more::Display)]
 #[non_exhaustive]
 pub enum Call {
@@ -44,9 +44,36 @@ pub enum Call {
     /// `proc_pidinfo` with `PROC_PIDLISTFDS`.
     #[display("proc_pidinfo PROC_PIDLISTFDS")]
     FileDescriptors,
+    /// The `kern.boottime` sysctl.
+    #[display("sysctl kern.boottime")]
+    BootTime,
+    /// `getloadavg`.
+    #[display("getloadavg")]
+    LoadAverage,
+    /// The `hw.memsize` sysctl.
+    #[display("sysctl hw.memsize")]
+    MemorySize,
+    /// The `hw.pagesize` sysctl.
+    #[display("sysctl hw.pagesize")]
+    PageSize,
+    /// `host_statistics64` with `HOST_VM_INFO64`.
+    #[display("host_statistics64 HOST_VM_INFO64")]
+    MemoryStatistics,
+    /// The `vm.swapusage` sysctl.
+    #[display("sysctl vm.swapusage")]
+    Swap,
+    /// `host_processor_info` with `PROCESSOR_CPU_LOAD_INFO`.
+    #[display("host_processor_info PROCESSOR_CPU_LOAD_INFO")]
+    Processors,
+    /// `processor_set_default`.
+    #[display("processor_set_default")]
+    DefaultProcessorSet,
+    /// `processor_set_statistics` with `PROCESSOR_SET_LOAD_INFO`.
+    #[display("processor_set_statistics PROCESSOR_SET_LOAD_INFO")]
+    TaskTotals,
 }
 
-/// An error from reading process data.
+/// An error from reading process or system data.
 ///
 /// The tools show each case differently. They leave an exited process out of
 /// their output, and show `-` for a denied read. Data that the kernel does not
@@ -84,6 +111,14 @@ pub enum Error {
         call: Call,
         /// The underlying error.
         source: io::Error,
+    },
+    /// A Mach call returned a `kern_return_t` other than `KERN_SUCCESS`.
+    #[error("{call}: Mach error {code}")]
+    Mach {
+        /// The call that failed.
+        call: Call,
+        /// The `kern_return_t` that the call returned.
+        code: libc::kern_return_t,
     },
 }
 
