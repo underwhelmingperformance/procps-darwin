@@ -284,10 +284,25 @@ Task 3.2 decides where each Darwin extension field falls.
   alternate screen and resize events. procps-ng's layout rules are ported
   directly, and a widget library would add a layout model that has to be worked
   around.
-- Command-line parsing for `ps` and `top` is ported from procps-ng, because
-  their syntax (BSD, UNIX and GNU forms mixed in one command line) is not
-  expressible in `clap`. `pgrep` and `pkill` also use a port of procps-ng's
-  parser so that error messages match.
+- `pgrep`, `pkill` and `procps-helperd` parse arguments with `clap`. procps-ng
+  parses `pgrep` and `pkill` with `getopt_long`, whose syntax `clap` accepts.
+  `pkill` first removes the first argument of the form `-<signal>`, as
+  procps-ng's `signal_option` does. `clap` errors are rendered in procps-ng's
+  format with exit status 2.
+- `ps` and `top` use parsers ported from procps-ng. `ps` mixes BSD, UNIX and GNU
+  forms in one command line, which `clap` cannot express. uutils/procps uses
+  `clap` for `ps` and rejects `ps aux`, `ps -u USER`, `ps -s SID` and `--sort`
+  as a result. Its tables of format specifiers and headers can still be reused.
+- Errors use `thiserror` in every crate. Each binary's top-level error enum
+  decides its exit status.
+- The tools write through a locked, buffered standard output and restore the
+  default `SIGPIPE` disposition, so a closed pipe terminates them silently as it
+  terminates procps-ng.
+- Library crates are instrumented with `tracing`. The tools install a subscriber
+  only when `PROCPS_DARWIN_LOG` is set, so by default they print nothing beyond
+  procps-ng's output.
+
+`AGENTS.md` lists the coding conventions that follow from these choices.
 
 ## Tasks
 
@@ -314,10 +329,13 @@ contains the results table for all of these calls.
 #### 0.2 Repository scaffolding
 
 Cargo workspace with the four crates, `LICENSE` (GPL-3.0-or-later), SPDX
-headers, a Nix flake with a development shell, `cargo-deny` configured to reject
-licences that are incompatible with GPL-3.0, and CI running format, lint and
-tests on macOS. Check the licence header of every procps-ng file before porting
-it; a GPL-2.0-only file cannot be ported.
+headers, strict clippy settings in `[workspace.lints]` (starting from
+`gifopt`'s, plus `undocumented_unsafe_blocks`), crane packages and checks in the
+flake, `clippy`, `test` and `doc` recipes in the justfile, `cargo-deny`
+configured to reject licences that are incompatible with GPL-3.0, and CI running
+format, lint and tests on macOS. The Nix flake, development shell, treefmt and
+git hooks already exist. Check the licence header of every procps-ng file before
+porting it; a GPL-2.0-only file cannot be ported.
 
 #### 0.3 procps-ng reference harness
 
@@ -587,8 +605,8 @@ summary of `docs/mappings.md`.
 
 - Unit tests run against `FixtureSource`, so selection, sorting and formatting
   are tested without depending on the live process table. Assertions compare
-  whole records or whole output strings, and similar cases use parameterised
-  tests.
+  whole records or whole output strings with `pretty_assertions`, similar cases
+  use `rstest`, and error variants are checked with `assert_matches`.
 - The reference harness (task 0.3) is the oracle for option parsing, error
   messages, exit codes and output layout.
 - macOS integration tests start child processes with controlled attributes and
