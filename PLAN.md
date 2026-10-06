@@ -253,8 +253,8 @@ forces a particular source for debugging and tests.
 `procps-helperd` runs as root under launchd with socket activation. The plist's
 `Sockets` entry creates a Unix stream socket in a root-owned directory under
 `/var/run`, and the daemon obtains it with `launch_activate_socket`. launchd
-starts the daemon on the first connection, and the daemon exits after a period
-with no connections.
+starts the daemon on the first connection, and the daemon exits a set time after
+its last connection closes.
 
 - The daemon only reads. It never sends signals: `pkill` calls `kill(2)` as the
   invoking user, so the kernel's permission checks still apply.
@@ -262,8 +262,8 @@ with no connections.
 - The client calls `getpeereid` on its end too and refuses to use a socket whose
   peer is not root.
 - Requests and responses are versioned, length-prefixed and encoded with `serde`
-  and `postcard`. The daemon rejects requests above a fixed size and stops work
-  that exceeds a time limit.
+  and `postcard`. The daemon refuses a request above a fixed size or one that
+  exceeds a time limit.
 - Each record contains the process start time. A client compares it with its own
   `kinfo_proc` data to detect a recycled pid.
 
@@ -621,24 +621,65 @@ because macOS gives them to every user without the helper. Linux guards
 `/proc/<pid>/exe` with the ptrace read-access check, so task 5.4 shows `-` in
 `ps`'s `exe` column where Linux would.
 
-#### 3.3 Daemon
+#### 3.3 Daemon (done)
 
 Socket activation, `getpeereid`, request handling through `LocalSource`, time
 limits, idle exit and logging. An integration test runs the daemon unprivileged
-on a temporary socket to exercise the transport. The time limit covers the whole
-connection, so a tool that sends its request one byte at a time cannot keep the
-connection open beyond the time limit. The daemon replies with a `Refusal` when
-it cannot take the snapshot, runs out of time, or would send a response larger
-than the limit.
+on a temporary socket to exercise the transport. The daemon replies with a
+`Refusal` when it cannot take the snapshot, runs out of time, would send a
+response larger than `Response::LIMIT`, or is too busy.
+
+`darwin-proc` declares `launch_activate_socket`, which the `libc` crate lacks,
+and reads the peer of a connection with `getpeereid` and `LOCAL_PEERPID`. The
+daemon takes its socket from the `Listeners` entry in the `Sockets` dictionary
+of its launchd property list, or, in tests, binds the path that `--socket`
+gives. It exits 60 seconds (the default of `--idle-timeout`) after it starts or
+after its last connection closes, whichever is later.
+
+The daemon serves each connection on its own thread and keeps at most 256
+connections open, 64 of them for one user. Like dbus-daemon's
+`max_connections_per_user` and systemd's `MaxConnections=`, these limits only
+protect the daemon from running out of descriptors and memory, and normal use
+never reaches them. launchd's default soft limit of 256 open files is below what
+the connection limits need, so the daemon raises its soft limit to 320, within
+the hard limit. The work is limited separately. The daemon has one worker for
+each processor, and each worker takes one snapshot at a time. A request that
+finds every worker busy waits in a fair queue: when a worker becomes free, the
+request whose user has the fewest snapshots running goes next. One user who
+sends many requests therefore delays mostly their own. `Refusal::Busy` goes to a
+connection beyond the connection limits, and to a request that waits for a
+worker beyond its snapshot time limit or gets one with less than half that limit
+left. A snapshot that starts so late would probably finish after the limit, and
+the helper would discard it after keeping the worker from other requests.
+
+A client has 1 second to send its request. The helper then has 10 seconds (the
+default of `--time-limit`), including any wait for a worker, to read the process
+data, and the client has another 10 seconds to receive the response. Each read
+and write gets the time that remains as its socket timeout, so a tool that sends
+its request one byte at a time cannot keep the connection open beyond the
+request's 1-second limit. The response has its own time limit so that the helper
+can still refuse a request that used up its time limit. The helper cannot
+interrupt a snapshot, so when a snapshot finishes after its time limit, the
+helper sends `Refusal::TimedOut` instead. A read from the kernel can also block
+forever, and would keep the daemon running. A watchdog therefore stops the
+daemon when a connection runs 30 seconds beyond its time limits, and launchd
+starts a new one for the next connection.
+
+The daemon logs JSON to standard error at the level that `PROCPS_DARWIN_LOG`
+sets, or `info`. Each snapshot that the daemon sends logs one `info` event, and
+refusals and faults that a client causes log at `debug`. The log still grows
+with every request, so in task 3.5 the property list must set
+`StandardErrorPath` so that launchd writes the log to a file, and that file
+needs log rotation.
 
 #### 3.4 Client
 
 `HelperSource`, source selection at start-up, the root peer check and the
 override variable. A tool reads process data itself after any refusal or
-protocol error. When a request has another version or is too large, the helper
-sends the refusal and closes the connection without reading the rest of the
-request, so a tool that is still writing gets `BrokenPipe` from the write before
-it reads the refusal.
+protocol error. When a request has another version or is too large, or when the
+helper has too many connections open, the helper sends the refusal and closes
+the connection without reading the rest of the request, so a tool that is still
+writing gets `BrokenPipe` from the write before it reads the refusal.
 
 #### 3.5 Packaging
 
@@ -650,7 +691,12 @@ and install and uninstall instructions for users without nix-darwin.
 `docs/helper-security.md` covering untrusted local clients, denial of service
 through expensive requests, information disclosure under the access policy, pid
 reuse, processes that change their credentials while the helper reads them, and
-spoofed sockets.
+spoofed sockets. Task 3.3 leaves two costs for it to document. A user can keep
+workers busy with requests that walk every process's memory regions, and the
+fair queue limits the delay that this causes other users but not the processor
+time. Each connection keeps its whole snapshot and the encoding in memory until
+it has sent the response, because the response limit applies to the encoding
+after the helper has built it.
 
 ### Phase 4: pgrep and pkill
 

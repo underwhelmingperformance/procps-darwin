@@ -522,7 +522,7 @@ fn hex<M: Message>(message: &M) -> String {
 
 /// The frame of [`fixed_response`] in the current version of the protocol.
 const RESPONSE: &str = concat!(
-    "0002000003e600e4f7c4d50600640006a00602a206018480808002a406f50300",
+    "0003000003e600e4f7c4d50600640006a00602a206018480808002a406f50300",
     "f60314151602170cfb1f01848001030180f7c4d506a0c21e076c61756e636864",
     "0180800100000d2f7362696e2f6c61756e6368640201000100076c61756e6368",
     "6401010100808080808020808080080180cab5ee010080e59a77000102030405",
@@ -557,19 +557,20 @@ const RESPONSE: &str = concat!(
 );
 
 #[rstest]
-#[case::request_for_identities(hex(&Request::Snapshot(SnapshotRequest::default())), "00020000000400000000")]
-#[case::request_for_everything(hex(&request_for_everything()), "000200000010000700010203040506010202be9a0c01")]
+#[case::request_for_identities(hex(&Request::Snapshot(SnapshotRequest::default())), "00030000000400000000")]
+#[case::request_for_everything(hex(&request_for_everything()), "000300000010000700010203040506010202be9a0c01")]
 #[case::response(hex(&fixed_response()), RESPONSE)]
-#[case::version_refusal(hex(&Response::Refused(Refusal::Version)), "0002000000020100")]
-#[case::request_too_large_refusal(hex(&Response::Refused(Refusal::RequestTooLarge)), "0002000000020101")]
-#[case::malformed_refusal(hex(&Response::Refused(Refusal::Malformed)), "0002000000020102")]
-#[case::failed_refusal(hex(&Response::Refused(Refusal::Failed)), "0002000000020103")]
-#[case::timed_out_refusal(hex(&Response::Refused(Refusal::TimedOut)), "0002000000020104")]
-#[case::response_too_large_refusal(hex(&Response::Refused(Refusal::ResponseTooLarge)), "0002000000020105")]
+#[case::version_refusal(hex(&Response::Refused(Refusal::Version)), "0003000000020100")]
+#[case::request_too_large_refusal(hex(&Response::Refused(Refusal::RequestTooLarge)), "0003000000020101")]
+#[case::malformed_refusal(hex(&Response::Refused(Refusal::Malformed)), "0003000000020102")]
+#[case::failed_refusal(hex(&Response::Refused(Refusal::Failed)), "0003000000020103")]
+#[case::timed_out_refusal(hex(&Response::Refused(Refusal::TimedOut)), "0003000000020104")]
+#[case::response_too_large_refusal(hex(&Response::Refused(Refusal::ResponseTooLarge)), "0003000000020105")]
+#[case::busy_refusal(hex(&Response::Refused(Refusal::Busy)), "0003000000020106")]
 fn the_encoding_matches_the_protocol_version(#[case] frame: String, #[case] expected: &str) {
     assert_eq!(
         (VERSION, frame.as_str()),
-        (2, expected),
+        (3, expected),
         "the encoding has changed: increase VERSION and replace the expected frames"
     );
 }
