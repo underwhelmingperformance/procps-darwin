@@ -10,9 +10,11 @@ mod linux;
 mod request;
 mod snapshot;
 mod source;
+mod summary;
 
 pub use field::Field;
 pub use linux::{LinuxPolicy, LinuxPriority, LinuxState};
 pub use request::{FieldGroup, SnapshotRequest};
 pub use snapshot::{Process, Snapshot, System, Usage};
 pub use source::{FixtureSource, LocalSource, ProcessSource, SourceError};
+pub use summary::{LinuxCpu, LinuxMemory, LinuxSwap};

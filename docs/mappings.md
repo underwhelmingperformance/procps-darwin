@@ -98,3 +98,44 @@ reports in `p_acflag`. Any user can read them.
 
 The third bit, `PF_MCE_PROCESS` (0x80), has no Darwin equivalent, so `f` is 0,
 1, 4 or 5.
+
+## Memory and swap in `top`'s summary
+
+procps-ng computes `top`'s memory line from Linux's `/proc/meminfo`. Darwin's
+`HOST_VM_INFO64` counts pages in other categories, so the tools compute each
+figure from the nearest Darwin categories:
+
+| Figure       | Linux source                           | Darwin source                             |
+| ------------ | -------------------------------------- | ----------------------------------------- |
+| `total`      | `MemTotal`                             | `hw.memsize`                              |
+| `free`       | `MemFree`                              | free pages, without the speculative pages |
+| `buff/cache` | `Buffers`, `Cached` and `SReclaimable` | file-backed and purgeable pages           |
+| `avail Mem`  | `MemAvailable`                         | free, file-backed and purgeable pages     |
+| `used`       | `MemTotal` minus `MemAvailable`        | the total minus the available memory      |
+
+XNU counts the speculative pages, which it reads ahead of use, as file-backed
+pages too, so the available memory does not add them again. The file-backed and
+purgeable pages together are what Activity Monitor shows as "Cached Files". As
+in procps-ng, the available memory falls back to the free memory when the sum of
+the free, file-backed and purgeable pages is 0 or larger than the total. The
+free, used and `buff/cache` figures do not add up to the total.
+
+The swap line uses `vm.swapusage`: its total, its available space as `free`, and
+the difference as `used`.
+
+## Processor states in `top`'s summary
+
+procps-ng computes `top`'s CPU line from the ticks in Linux's `/proc/stat`
+between two refreshes. Darwin's `host_processor_info` reports four states for
+each processor:
+
+| State                  | Darwin source                                                     |
+| ---------------------- | ----------------------------------------------------------------- |
+| `us`                   | `CPU_STATE_USER`, which includes the user time of niced processes |
+| `sy`                   | `CPU_STATE_SYSTEM`                                                |
+| `id`                   | `CPU_STATE_IDLE`                                                  |
+| `ni`                   | `CPU_STATE_NICE`, which Darwin always reports as 0                |
+| `wa`, `hi`, `si`, `st` | none, so 0                                                        |
+
+Darwin's tick counters are 32 bits wide and wrap, so each difference is taken
+modulo 2³².
