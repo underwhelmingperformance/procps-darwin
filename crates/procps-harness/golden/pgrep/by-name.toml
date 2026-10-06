@@ -1,0 +1,11 @@
+status = 0
+stdout = """
+{a1}
+{a2}
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
+a2 = "running"
+b1 = "running"

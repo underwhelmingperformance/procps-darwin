@@ -17,3 +17,15 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+libtest-mimic = "0.8.2"
+pretty_assertions = "1.4.1"
+procps-harness = { path = "../procps-harness" }
+thiserror = "2.0.21"
+
+# The reference test has its own `main`, so that its binary can also run as the
+# harness's session leader and fixture processes.
+[[test]]
+name = "reference"
+harness = false
