@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[graph]
+targets = ["aarch64-apple-darwin"]
+
+[licenses]
+# Add an SPDX identifier here when a dependency first needs it, and only if
+# its terms allow distribution as part of a GPL-3.0-or-later work.
+allow = ["GPL-3.0-or-later"]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# A path dependency on another workspace crate has no version, which counts as
+# a wildcard. That is safe here because no crate is published.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

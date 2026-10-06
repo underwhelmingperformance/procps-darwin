@@ -5,6 +5,13 @@
   description = "procps-ng's ps, top, pgrep and pkill for macOS";
 
   inputs = {
+    advisory-db = {
+      url = "github:rustsec/advisory-db";
+      flake = false;
+    };
+
+    crane.url = "github:ipetkov/crane";
+
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -32,8 +39,10 @@
     flake-parts.lib.mkFlake {inherit inputs;} {
       imports = [
         ./nix/base.nix
+        ./nix/checks.nix
         ./nix/devshell.nix
         ./nix/git-hooks.nix
+        ./nix/packages.nix
         ./nix/reuse.nix
         ./nix/treefmt.nix
       ];

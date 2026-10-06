@@ -18,6 +18,8 @@ _: {
         ++ [
           rustToolchain
           rustfmtNightly
+          pkgs.cargo-audit
+          pkgs.cargo-deny
           pkgs.just
           pkgs.reuse
         ];
