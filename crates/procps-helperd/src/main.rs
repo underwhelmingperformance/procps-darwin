@@ -8,7 +8,8 @@
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use clap::Parser;
-use procps_helperd::{Config, ErrorChain, TimeLimits};
+use procps_core::ErrorChain;
+use procps_helperd::{Config, TimeLimits};
 use tracing_subscriber::EnvFilter;
 
 /// The variable that sets which events the helper logs.

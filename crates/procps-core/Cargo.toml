@@ -21,11 +21,17 @@ workspace = true
 [dependencies]
 darwin-proc = { workspace = true, features = ["serde"] }
 postcard.workspace = true
+rustix.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+[features]
+testing = []
+
 [dev-dependencies]
 assert_matches.workspace = true
 pretty_assertions.workspace = true
+procps-core = { workspace = true, features = ["testing"] }
 rstest.workspace = true
+tempfile.workspace = true

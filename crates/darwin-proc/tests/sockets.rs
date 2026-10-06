@@ -7,7 +7,7 @@
 use std::{fs::File, os::unix::net::UnixStream};
 
 use assert_matches::assert_matches;
-use darwin_proc::{Call, Error, LaunchdSockets, Peer, Pid};
+use darwin_proc::{Call, Error, LaunchdSockets, Peer, PeerCredentials, Pid};
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -64,6 +64,23 @@ fn a_file_has_no_peer() -> Result<(), Box<dyn std::error::Error>> {
             call: Call::PeerCredentials,
             ..
         })
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_closed_socket_still_has_peer_credentials() -> Result<(), Box<dyn std::error::Error>> {
+    let (ours, theirs) = UnixStream::pair()?;
+    drop(theirs);
+    let credentials = Pid::current().info()?.credentials;
+
+    assert_eq!(
+        PeerCredentials::of(&ours)?,
+        PeerCredentials {
+            uid: credentials.euid,
+            gid: credentials.egid,
+        }
     );
 
     Ok(())

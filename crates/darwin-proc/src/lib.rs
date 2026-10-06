@@ -37,7 +37,7 @@ pub use pid::Pid;
 pub use region::{Protection, Region, ShareMode};
 pub use resource::{ResourceCounters, ResourceUsage};
 pub use signal_set::SignalSet;
-pub use socket::{LaunchdSockets, Peer};
+pub use socket::{LaunchdSockets, Peer, PeerCredentials};
 pub use system::{Host, LoadAverage, Memory, ProcessorTicks, Swap, TaskTotals};
 pub use task::{SchedulingPolicy, TaskInfo};
 pub use thread::{RunState, ThreadInfo};

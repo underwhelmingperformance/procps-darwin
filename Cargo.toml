@@ -33,7 +33,7 @@ procps-core = { path = "crates/procps-core" }
 procps-harness = { path = "crates/procps-harness" }
 regex = "1.13.1"
 rstest = "0.27.0"
-rustix = { version = "1.1.5", features = ["event", "process"] }
+rustix = { version = "1.1.5", features = ["event", "net", "process"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"

@@ -13,15 +13,16 @@ use std::{error::Error, fmt};
 /// ```
 /// use std::io;
 ///
-/// use procps_core::helper::ProtocolError;
-/// use procps_helperd::{ErrorChain, ServeError};
+/// use procps_core::{ErrorChain, SourceError};
 ///
-/// let error = ServeError::Protocol(ProtocolError::Io(io::ErrorKind::TimedOut.into()));
+/// let error = SourceError::ProcessTable(darwin_proc::Error::Os {
+///     call: darwin_proc::Call::ProcessTable,
+///     source: io::Error::from_raw_os_error(1),
+/// });
 ///
 /// assert_eq!(
 ///     ErrorChain(&error).to_string(),
-///     "cannot exchange messages with the client: \
-///      cannot read from or write to the helper connection: timed out"
+///     "cannot list processes: sysctl kern.proc: Operation not permitted (os error 1)"
 /// );
 /// ```
 #[derive(Clone, Copy, Debug)]
@@ -46,29 +47,5 @@ impl fmt::Display for ErrorChain<'_> {
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io;
-
-    use pretty_assertions::assert_eq;
-
-    use super::ErrorChain;
-    use crate::DaemonError;
-
-    #[test]
-    fn a_source_in_its_parents_message_appears_once() {
-        let error = DaemonError::Launchd(darwin_proc::Error::Os {
-            call: darwin_proc::Call::LaunchdSockets,
-            source: io::Error::from_raw_os_error(3),
-        });
-
-        assert_eq!(
-            ErrorChain(&error).to_string(),
-            "cannot take the socket from launchd: launch_activate_socket: No such process (os \
-             error 3)"
-        );
     }
 }

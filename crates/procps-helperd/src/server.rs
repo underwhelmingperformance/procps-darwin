@@ -12,11 +12,13 @@ use std::{
 
 use darwin_proc::Peer;
 use procps_core::{
-    ProcessSource, SnapshotRequest,
-    helper::{Caller, ProtocolError, ReadMessage, Refusal, Request, Response, WriteMessage},
+    ErrorChain, ProcessSource, SnapshotRequest,
+    helper::{
+        Caller, Deadline, ProtocolError, ReadMessage, Refusal, Request, Response, WriteMessage,
+    },
 };
 
-use crate::{ErrorChain, deadline::Deadline, workers::Workers};
+use crate::workers::Workers;
 
 /// The time limits for each connection.
 ///

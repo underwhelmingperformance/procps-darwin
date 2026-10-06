@@ -13,10 +13,10 @@ use std::{
 };
 
 use darwin_proc::{Peer, Uid};
-use procps_core::ProcessSource;
+use procps_core::{ErrorChain, ProcessSource};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
-use crate::{ErrorChain, Server};
+use crate::Server;
 
 /// How often the listener checks for a connection that has run far beyond its
 /// time limits, while it waits for the next connection. It must be less than a

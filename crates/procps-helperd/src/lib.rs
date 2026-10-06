@@ -6,13 +6,10 @@
 //! and withholds what each caller may not read.
 
 mod daemon;
-mod deadline;
 mod listener;
-mod report;
 mod server;
 mod workers;
 
 pub use daemon::{Config, DaemonError};
 pub use listener::{ConnectionLimits, ListenError, Listener};
-pub use report::ErrorChain;
 pub use server::{ServeError, Server, TimeLimits};

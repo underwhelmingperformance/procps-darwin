@@ -264,8 +264,9 @@ its last connection closes.
 - Requests and responses are versioned, length-prefixed and encoded with `serde`
   and `postcard`. The daemon refuses a request above a fixed size or one that
   exceeds a time limit.
-- Each record contains the process start time. A client compares it with its own
-  `kinfo_proc` data to detect a recycled pid.
+- Each record contains the process start time. `pkill` (task 4.4) reads the
+  start time again just before `kill(2)` and compares it with the start time in
+  the record, to detect a recycled pid.
 
 The access policy follows Linux procfs defaults (no `hidepid`):
 
@@ -672,19 +673,43 @@ with every request, so in task 3.5 the property list must set
 `StandardErrorPath` so that launchd writes the log to a file, and that file
 needs log rotation.
 
-#### 3.4 Client
+#### 3.4 Client (done)
 
 `HelperSource`, source selection at start-up, the root peer check and the
-override variable. A tool reads process data itself after any refusal or
-protocol error. When a request has another version or is too large, or when the
-helper has too many connections open, the helper sends the refusal and closes
-the connection without reading the rest of the request, so a tool that is still
-writing gets `BrokenPipe` from the write before it reads the refusal.
+override variable.
+
+`HelperSource` connects to `/var/run/procps-darwin/helper.sock`. Before it sends
+anything, it checks with `getpeereid` that the process listening on the socket
+runs as root, so that the tool never reads data from a socket that another user
+has created at the path. The whole exchange has a 30-second deadline. The
+defaults of the helper's time limits add up to 21 seconds, so the tool receives
+the helper's response or refusal before its own time runs out. Every error
+becomes `SourceError::Helper`. When the helper refuses a request and closes the
+connection while the tool is still writing it, the write fails with `EPIPE` or
+`ENOTCONN`, and the tool then reads the refusal.
+
+`SourceChoice::choose` decides the source, and the tools will call it at
+start-up. `PROCPS_DARWIN_SOURCE` forces a source when it is `local` or `helper`,
+an empty value counts as unset, and any other value is an error. When the
+variable forces the helper, the tool returns the helper's errors and does not
+read process data itself, so those errors are visible when debugging the helper.
+Root reads process data itself. A user other than root reads through the helper
+when its socket exists, and reads process data itself when the helper fails.
+After an error that the helper would repeat, such as an untrusted socket or
+another protocol version, the tool reads every later snapshot itself, so `top`
+does not wait for a failing helper on each refresh. When a tool reads process
+data itself, it shows `-` for each value that macOS withholds from other users'
+processes, including values that Linux shows to every user.
 
 #### 3.5 Packaging
 
 The launchd plist, a nix-darwin module that installs the daemon and its socket,
-and install and uninstall instructions for users without nix-darwin.
+and install and uninstall instructions for users without nix-darwin. The socket
+is `/var/run/procps-darwin/helper.sock`, and only root may write to its
+directory. The directory has mode 0755 and the socket has mode 0666, because
+`connect(2)` needs search permission on the directory and write permission on
+the socket, and every user's tools connect to it. The property list sets
+`StandardErrorPath` and the log needs rotation, as task 3.3 describes.
 
 #### 3.6 Threat model
 
@@ -696,7 +721,13 @@ workers busy with requests that walk every process's memory regions, and the
 fair queue limits the delay that this causes other users but not the processor
 time. Each connection keeps its whole snapshot and the encoding in memory until
 it has sent the response, because the response limit applies to the encoding
-after the helper has built it.
+after the helper has built it. A user who keeps the helper busy makes it refuse
+other users with `Busy`, and those users' tools then read process data
+themselves. A tool that reads process data itself cannot read other users'
+arguments, because macOS withholds them. What `pgrep -f` and `pkill -f` can
+match for those users therefore changes from one run to the next. A timeout or
+`Busy` does not make a tool stop using the helper, so a helper whose connections
+get stuck costs `top` up to 30 seconds on each refresh.
 
 ### Phase 4: pgrep and pkill
 
@@ -723,7 +754,9 @@ this in `docs/mappings.md`.
 
 Parse signal names and numbers for Darwin's signal set (which has `SIGINFO` and
 `SIGEMT` and no real-time signals) and send them with `kill(2)`. Report failures
-in procps-ng's format.
+in procps-ng's format. Just before signalling, read each process's start time
+again and skip a process whose start time has changed, because its pid now
+belongs to another process.
 
 #### 4.5 Unsupported options
 
