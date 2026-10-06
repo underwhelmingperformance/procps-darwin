@@ -35,6 +35,9 @@ pub enum Call {
     /// `proc_pidinfo` with `PROC_PIDTHREADID64INFO`.
     #[display("proc_pidinfo PROC_PIDTHREADID64INFO")]
     ThreadInfo,
+    /// `proc_pidinfo` with `PROC_PIDREGIONINFO`.
+    #[display("proc_pidinfo PROC_PIDREGIONINFO")]
+    Regions,
 }
 
 /// An error from reading process data.
