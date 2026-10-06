@@ -191,6 +191,14 @@ pub struct MachTimebaseInfo {
 unsafe extern "C" {
     /// `mach_timebase_info` from `<mach/mach_time.h>`.
     pub fn mach_timebase_info(info: *mut MachTimebaseInfo) -> libc::c_int;
+
+    /// `devname_r` from `<stdlib.h>`, which the `libc` crate does not declare.
+    pub fn devname_r(
+        dev: libc::dev_t,
+        kind: libc::mode_t,
+        buffer: *mut libc::c_char,
+        length: libc::c_int,
+    ) -> *mut libc::c_char;
 }
 
 /// `struct proc_regioninfo` from `<sys/proc_info.h>`.

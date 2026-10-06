@@ -38,6 +38,12 @@ pub enum Call {
     /// `proc_pidinfo` with `PROC_PIDREGIONINFO`.
     #[display("proc_pidinfo PROC_PIDREGIONINFO")]
     Regions,
+    /// `proc_pidinfo` with `PROC_PIDVNODEPATHINFO`.
+    #[display("proc_pidinfo PROC_PIDVNODEPATHINFO")]
+    WorkingDirectory,
+    /// `proc_pidinfo` with `PROC_PIDLISTFDS`.
+    #[display("proc_pidinfo PROC_PIDLISTFDS")]
+    FileDescriptors,
 }
 
 /// An error from reading process data.

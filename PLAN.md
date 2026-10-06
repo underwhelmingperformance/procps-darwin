@@ -451,11 +451,16 @@ of an OrbStack helper alone, with 4,831 regions and 1.6 GiB resident, took 860
 ms. A walk of a Chrome renderer with 199,201 regions and 330 MiB resident took
 130 ms.
 
-#### 1.6 Other per-process data
+#### 1.6 Other per-process data (done)
 
-Working directory (`PROC_PIDVNODEPATHINFO`), file descriptor count
-(`PROC_PIDLISTFDS`), terminal names (`devname`), and cached user and group
-names.
+`Pid::working_directory` reads `PROC_PIDVNODEPATHINFO`, and
+`Pid::file_descriptors` lists the open descriptors with `PROC_PIDLISTFDS`. Both
+calls fail with `EPERM` for another user's process and for `kernel_task`, so the
+helper has to read the working directory and descriptors of other users'
+processes. `Terminal::name` finds a terminal's name in `/dev` with `devname_r`.
+`Uid` and `Gid` look up names from IDs and IDs from names with `getpwuid_r`,
+`getgrgid_r`, `getpwnam_r` and `getgrnam_r`. Each lookup is an IPC call to
+`opendirectoryd`, so `procps-core` should cache the names.
 
 #### 1.7 System statistics
 

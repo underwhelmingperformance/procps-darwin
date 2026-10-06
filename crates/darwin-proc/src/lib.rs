@@ -13,6 +13,7 @@
 mod arguments;
 mod error;
 mod ffi;
+mod files;
 mod info;
 mod libproc;
 mod path;
@@ -22,8 +23,10 @@ mod resource;
 mod signal_set;
 mod sysctl;
 mod task;
+mod terminal;
 mod thread;
 mod time;
+mod user;
 
 pub use arguments::{Arguments, MalformedArguments};
 pub use error::{Call, Error};
@@ -34,3 +37,4 @@ pub use resource::ResourceUsage;
 pub use signal_set::SignalSet;
 pub use task::{SchedulingPolicy, TaskInfo};
 pub use thread::{RunState, ThreadInfo};
+pub use user::{Gid, Uid};
