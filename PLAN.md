@@ -504,7 +504,7 @@ string and the process's `argv[0]` is empty, even if that is the real
 environment. A `FixtureSource` reports a requested group that its fixture lacks
 as unsupported.
 
-#### 2.3 Linux mappings
+#### 2.3 Linux mappings (done)
 
 Implement and document in `docs/mappings.md`:
 
@@ -522,22 +522,23 @@ Implement and document in `docs/mappings.md`:
 - CPU states (done): Darwin counts all user-mode time as user time and reports
   no nice ticks, so `ni` shows `0.0` and `us` includes the time of niced
   processes.
-- The sizes for `trs`, `drs`, `size` and `sz`. procps-ng computes `trs` and
-  `drs` from the virtual size and the bounds of the code segment in
+- The sizes for `trs`, `drs`, `size` and `sz` (done). procps-ng computes `trs`
+  and `drs` from the virtual size and the bounds of the code segment in
   `/proc/<pid>/stat`, not from the memory regions. `size` is `VmData` plus
   `VmStk` from `/proc/<pid>/status`, in KiB, and `sz` is the virtual size in
-  pages. Choose the Darwin sources of the code segment's size and of the data
-  and stack sizes, such as the regions from task 1.5.
-- Proportional set size: choose between an approximation from region sharing
-  counts and `-`.
-- The command-name length: Linux truncates `comm` to 15 characters and `pgrep`
-  warns about longer patterns; Darwin's `p_comm` has 16 characters and
-  `proc_name` up to 32. Choose which name `pgrep` matches and adjust the warning
-  to match.
-- How `args` is shown when the arguments are denied. procps-ng shows `[comm]`
-  when it cannot read `/proc/<pid>/cmdline`, for any reason, so a denied command
-  line shows `[comm]` as on Linux.
-- What `kernel_task` shows in the `exe` column and the size columns.
+  pages. Darwin does not report the code segment's bounds, so `trs` counts the
+  executable regions that are not submaps, which leaves out the shared cache,
+  and `size` counts the private writable regions that are not submaps.
+- Proportional set size (done): Darwin does not report how many processes share
+  each page, so `pss` shows `-`. `uss` is the private resident memory.
+- The command-name length (done): the tools cut `p_comm` to Linux's 15 bytes, so
+  `pgrep` matches and warns as on Linux.
+- How `args` is shown when the arguments are denied (done). procps-ng shows
+  `[comm]` when it cannot read `/proc/<pid>/cmdline`, for any reason, so a
+  denied command line shows `[comm]` as on Linux.
+- What `kernel_task` shows in the `exe` column and the size columns (done): `-`
+  for the executable and the region columns, and `[kernel_task]` for its command
+  line.
 
 ### Phase 3: privileged helper
 

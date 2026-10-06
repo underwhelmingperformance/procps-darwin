@@ -52,6 +52,25 @@ impl<T> Field<T> {
         }
     }
 
+    /// A field that borrows this field's value.
+    ///
+    /// ```
+    /// use procps_core::Field;
+    ///
+    /// let name = Field::Available(String::from("launchd"));
+    ///
+    /// assert_eq!(name.as_ref().map(String::len), Field::Available(7));
+    /// ```
+    #[must_use]
+    pub const fn as_ref(&self) -> Field<&T> {
+        match self {
+            Self::Available(value) => Field::Available(value),
+            Self::Denied => Field::Denied,
+            Self::Unsupported => Field::Unsupported,
+            Self::Failed => Field::Failed,
+        }
+    }
+
     /// Applies `f` to an available value, and returns any other variant
     /// unchanged.
     ///
