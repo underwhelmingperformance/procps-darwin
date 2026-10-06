@@ -31,7 +31,7 @@ use crate::{Snapshot, SnapshotRequest};
 /// assert_eq!(wire[..2], VERSION.to_be_bytes());
 /// # Ok::<(), procps_core::helper::ProtocolError>(())
 /// ```
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 
 /// The size of a message's header, which contains the version and the length
 /// of the body.
@@ -72,10 +72,11 @@ pub enum Response {
 /// The reason why the helper did not handle a request.
 ///
 /// A tool should read process data itself after any refusal or
-/// [`ProtocolError`]. When a request has another version or is too large, the
-/// helper sends the refusal and closes the connection without reading the rest
-/// of the request. A tool that is still writing the request then gets
-/// [`io::ErrorKind::BrokenPipe`] from the write before it reads the refusal.
+/// [`ProtocolError`]. When a request has another version or is too large, or
+/// when the helper has too many connections open, the helper sends the refusal
+/// and closes the connection without reading the rest of the request. A tool
+/// that is still writing the request then gets [`io::ErrorKind::BrokenPipe`]
+/// from the write before it reads the refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Refusal {
     /// The request has another protocol version. The header of this refusal
@@ -93,6 +94,10 @@ pub enum Refusal {
     TimedOut,
     /// The encoded response is larger than [`Response::LIMIT`].
     ResponseTooLarge,
+    /// The helper has too many connections open, for all clients or for the
+    /// client's user, or the wait for a worker used more than half the
+    /// snapshot time limit.
+    Busy,
 }
 
 /// A message in the protocol: a [`Request`] or a [`Response`].

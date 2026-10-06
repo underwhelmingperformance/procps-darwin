@@ -232,6 +232,15 @@ unsafe extern "C" {
         buffer: *mut libc::c_char,
         length: libc::c_int,
     ) -> *mut libc::c_char;
+
+    /// `launch_activate_socket` from `<launch.h>`, which the `libc` crate does
+    /// not declare. On success, the caller owns the descriptors and frees the
+    /// array with `free`.
+    pub fn launch_activate_socket(
+        name: *const libc::c_char,
+        fds: *mut *mut libc::c_int,
+        count: *mut libc::size_t,
+    ) -> libc::c_int;
 }
 
 /// `struct proc_regioninfo` from `<sys/proc_info.h>`.

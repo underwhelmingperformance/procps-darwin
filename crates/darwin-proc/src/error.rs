@@ -75,6 +75,15 @@ pub enum Call {
     /// `processor_set_statistics` with `PROCESSOR_SET_LOAD_INFO`.
     #[display("processor_set_statistics PROCESSOR_SET_LOAD_INFO")]
     TaskTotals,
+    /// `getpeereid`.
+    #[display("getpeereid")]
+    PeerCredentials,
+    /// `getsockopt` with `LOCAL_PEERPID`.
+    #[display("getsockopt LOCAL_PEERPID")]
+    PeerProcess,
+    /// `launch_activate_socket`.
+    #[display("launch_activate_socket")]
+    LaunchdSockets,
 }
 
 /// An error from reading process or system data.
