@@ -151,8 +151,8 @@ supply every column that Apple's `ps` and `top` show.
 `kernel_task` (pid 0) is the exception, even for root. `proc_pidpath` fails with
 `ESRCH`, `KERN_PROCARGS2` with `EINVAL`, and `PROC_PIDREGIONPATHINFO` and
 `PROC_PIDLISTFDS` with `EPERM`. Its identity, CPU, memory, thread and working
-directory data are readable. Task 2.3 decides how `args` and the region-based
-columns appear for it.
+directory data are readable. Task 2.3 decides how `args` and the size columns
+appear for it.
 
 No design here depends on task ports. All per-process data comes from
 `proc_pidinfo`, `proc_pid_rusage` and `sysctl`.
@@ -433,8 +433,8 @@ every thread's sleep time.
 `Pid::regions` calls `proc_pidinfo` with `PROC_PIDREGIONINFO` repeatedly, from
 address 0. It returns each region's address and size, protection, share mode,
 user tag, memory object ID, reference count and flags, and its resident, swapped
-and dirtied sizes in bytes. Task 2.3 classifies the regions into the sizes that
-`ps` and `top` show.
+and dirtied sizes in bytes. Task 2.3 decides which of the sizes that `ps` and
+`top` show come from the regions.
 
 The kernel counts the private and shared resident pages in its own 16 KiB pages.
 It reports the other page counts in the smaller of the caller's and the target's
@@ -508,24 +508,24 @@ as unsupported.
 
 Implement and document in `docs/mappings.md`:
 
-- State letters: `Z` from `SZOMB`; `T` from `SSTOP`, or `t` when the process is
-  also traced; `R` when any thread is running; `D` when any thread is in an
-  uninterruptible wait; `S` otherwise. Modifiers: `<` and `N` from nice, `s` for
-  a session leader, `l` for more than one thread, `+` for the foreground process
-  group of its terminal. Darwin reports `SRUN` for almost every live process, so
-  without thread data only `Z` and `T` are reliable; decide what to show for the
-  remaining cases in that situation.
-- Priority and nice scales for `pri`, `PR` and `NI`.
-- Scheduling policy names from `pth_policy`.
-- Bits of the `f` column, where a Darwin flag has the same meaning.
+- State letters and modifiers (done). With neither the threads nor the task
+  information, the state letter is `-`.
+- Priority and nice scales for `pri`, `PR` and `NI` (done).
+- Scheduling policy names (done).
+- Bits of the `f` column, where a Darwin flag has the same meaning (done).
 - Memory summary figures. Proposed: `buff/cache` is file-backed pages plus
   purgeable pages, which matches Activity Monitor's "Cached Files", and `avail`
-  is free, speculative, file-backed and purgeable pages together.
+  is free, speculative, file-backed and purgeable pages together. procps-ng
+  computes `used` as the total minus the available memory, so `free`, `used` and
+  `buff/cache` do not add up to the total.
 - CPU states: Darwin counts all user-mode time as user time and reports no nice
   ticks, so `ni` shows `0.0` and `us` includes the time of niced processes.
-- Region-based sizes for `trs`, `drs`, `size` and `sz`: classify the regions
-  from task 1.5 by protection, share mode, user tag and memory object, and
-  decide how to count the shared cache and other submaps.
+- The sizes for `trs`, `drs`, `size` and `sz`. procps-ng computes `trs` and
+  `drs` from the virtual size and the bounds of the code segment in
+  `/proc/<pid>/stat`, not from the memory regions. `size` is `VmData` plus
+  `VmStk` from `/proc/<pid>/status`, in KiB, and `sz` is the virtual size in
+  pages. Choose the Darwin sources of the code segment's size and of the data
+  and stack sizes, such as the regions from task 1.5.
 - Proportional set size: choose between an approximation from region sharing
   counts and `-`.
 - The command-name length: Linux truncates `comm` to 15 characters and `pgrep`
@@ -533,10 +533,9 @@ Implement and document in `docs/mappings.md`:
   `proc_name` up to 32. Choose which name `pgrep` matches and adjust the warning
   to match.
 - How `args` is shown when the arguments are denied. procps-ng shows `[comm]`
-  for processes with an empty command line, which on Linux means a kernel
-  thread. That form suits `kernel_task`, whose arguments even root cannot read,
-  but could mislead for a user process whose arguments are denied.
-- What `kernel_task` shows in the `exe` column and the region-based columns.
+  when it cannot read `/proc/<pid>/cmdline`, for any reason, so a denied command
+  line shows `[comm]` as on Linux.
+- What `kernel_task` shows in the `exe` column and the size columns.
 
 ### Phase 3: privileged helper
 

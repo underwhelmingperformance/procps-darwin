@@ -5,11 +5,9 @@
 /// A value that a source read for a process, or the reason why the source has
 /// no value.
 ///
-/// The formatters decide how to show each case. Most columns show `-` whatever
-/// the reason, but some can show the cases differently. procps-ng shows a
-/// process without arguments, such as a kernel thread, as `[comm]`. A formatter
-/// can show `[comm]` for `kernel_task`, whose arguments are unsupported, and
-/// `-` for a user process whose arguments are denied.
+/// The formatters decide how to show each case, and most columns show `-`
+/// whatever the reason. The variants still record why a value is missing, for
+/// the helper's access policy, the logs and the tests.
 ///
 /// ```
 /// use procps_core::Field;

@@ -36,6 +36,8 @@ pub struct ProcessInfo {
     pub status: Status,
     /// The kernel's `P_*` flags.
     pub flags: ProcessFlags,
+    /// The process accounting flags from `p_acflag`.
+    pub accounting: AccountingFlags,
     /// Whether the process leads its session.
     pub session_leader: bool,
     /// When the process started.
@@ -108,6 +110,49 @@ impl From<libc::c_char> for Status {
             ffi::SZOMB => Self::Zombie,
             other => Self::Other(other),
         }
+    }
+}
+
+/// The process accounting flags in `<sys/acct.h>`, which the kernel keeps in
+/// `p_acflag`.
+///
+/// ```
+/// use darwin_proc::AccountingFlags;
+///
+/// let flags = AccountingFlags::from(0x2);
+///
+/// assert_eq!(
+///     (flags.forked_without_exec(), flags.used_superuser()),
+///     (false, true)
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, derive_more::From)]
+pub struct AccountingFlags(u16);
+
+impl AccountingFlags {
+    /// `AFORK`: `fork` created the process, and it has not executed a program
+    /// since.
+    ///
+    /// ```
+    /// use darwin_proc::AccountingFlags;
+    ///
+    /// assert!(AccountingFlags::from(0x1).forked_without_exec());
+    /// ```
+    #[must_use]
+    pub const fn forked_without_exec(self) -> bool {
+        self.0 & ffi::AFORK != 0
+    }
+
+    /// `ASU`: the process has used superuser privileges.
+    ///
+    /// ```
+    /// use darwin_proc::AccountingFlags;
+    ///
+    /// assert!(AccountingFlags::from(0x2).used_superuser());
+    /// ```
+    #[must_use]
+    pub const fn used_superuser(self) -> bool {
+        self.0 & ffi::ASU != 0
     }
 }
 
@@ -266,6 +311,7 @@ impl From<&KinfoProc> for ProcessInfo {
             priority: proc.p_priority,
             status: Status::from(proc.p_stat),
             flags: ProcessFlags::from(proc.p_flag.cast_unsigned()),
+            accounting: AccountingFlags::from(proc.p_acflag),
             session_leader: eproc.e_flag & ffi::EPROC_SLEADER != 0,
             start_time: SystemTime::UNIX_EPOCH
                 + Duration::from_secs(u64::try_from(start.tv_sec).unwrap_or(0))
@@ -390,7 +436,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    use super::{Credentials, ProcessFlags, ProcessInfo, Status, Terminal};
+    use super::{AccountingFlags, Credentials, ProcessFlags, ProcessInfo, Status, Terminal};
     use crate::{
         Gid, Pid, SignalSet, Uid,
         ffi::{self, KinfoProc},
@@ -404,6 +450,7 @@ mod tests {
         proc.p_pid = 4321;
         proc.p_stat = ffi::SSTOP;
         proc.p_flag = ffi::P_LP64 | ffi::P_TRACED;
+        proc.p_acflag = 0x3;
         proc.p_nice = -5;
         proc.p_priority = 31;
         proc.p_starttime = libc::timeval {
@@ -456,6 +503,7 @@ mod tests {
             priority: 31,
             status: Status::Stopped,
             flags: ProcessFlags::from(0x804),
+            accounting: AccountingFlags::from(0x3),
             session_leader: true,
             start_time: SystemTime::UNIX_EPOCH + Duration::from_millis(1_700_000_000_250),
             comm: "worker".to_owned(),
