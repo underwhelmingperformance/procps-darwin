@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.metadata.crane]
+name = "procps-darwin"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/underwhelmingperformance/procps-darwin"
+readme = "README.md"
+keywords = ["procps", "ps", "top", "pgrep", "macos"]
+categories = ["command-line-utilities", "os::macos-apis"]
+publish = false
+
+[workspace.lints.rust]
+missing_docs = "warn"
+# Only darwin-proc may contain `unsafe` code. When it does, it opts out at its
+# root with `#![expect(unsafe_code, reason = "...")]`. A crate can override
+# `deny` that way, but not `forbid`.
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+cognitive_complexity = "warn"
+dbg_macro = "warn"
+multiple_crate_versions = "allow"
+print_stderr = "warn"
+print_stdout = "warn"
+todo = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
