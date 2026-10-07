@@ -127,6 +127,64 @@ fn a_stream_that_is_closed_at_start_up_stays_closed(
     Ok(())
 }
 
+/// A process whose command line is longer than a stream's buffer, so that
+/// `pgrep -a` writes its line with one call that fails, and leaves nothing in
+/// the buffer. Dropping it ends the process.
+struct LongCommandLine(std::process::Child);
+
+impl LongCommandLine {
+    fn start() -> std::io::Result<Self> {
+        let long = "y".repeat(5000);
+        let child = Command::new("/bin/sh")
+            .args(["-c", "read line", &long])
+            .stdin(Stdio::piped())
+            .spawn()?;
+
+        Ok(Self(child))
+    }
+}
+
+impl Drop for LongCommandLine {
+    fn drop(&mut self) {
+        drop(self.0.stdin.take());
+        let _ = self.0.wait();
+    }
+}
+
+// With standard input and standard output closed, procps-ng's epoll
+// descriptor takes descriptor 0, and descriptor 1 stays closed. `fclose`
+// then fails with `EBADF` after the failed write. A pid file opened by its
+// path takes descriptor 1, and `fclose` closes it without an error.
+#[rstest]
+#[case::closed("-p", "pgrep: write error: Bad file descriptor\n")]
+#[case::pid_file("-F", "pgrep: write error\n")]
+fn closing_standard_output_after_a_failed_write_is_reported_as_in_procps_ng(
+    #[case] option: &str,
+    #[case] stderr: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _alone = alone();
+    let process = LongCommandLine::start()?;
+    let directory = tempfile::tempdir()?;
+    let pid_file = directory.path().join("long.pid");
+    std::fs::write(&pid_file, format!("{}\n", process.0.id()))?;
+    let value = if option == "-p" {
+        process.0.id().to_string()
+    } else {
+        pid_file.to_str().ok_or("path is not UTF-8")?.to_owned()
+    };
+
+    assert_eq!(
+        run(
+            env!("CARGO_BIN_EXE_pgrep"),
+            &format!("-a {option} {value}"),
+            "<&- >&-"
+        )?,
+        (Some(1), stderr.to_owned())
+    );
+
+    Ok(())
+}
+
 #[rstest]
 #[case::pgrep(env!("CARGO_BIN_EXE_pgrep"))]
 #[case::pkill(env!("CARGO_BIN_EXE_pkill"))]

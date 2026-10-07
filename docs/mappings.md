@@ -225,9 +225,11 @@ both systems, because the command line keeps the name that the caller used.
 Without the helper, macOS withholds the arguments of another user's process. The
 tools then use the command line that procps-ng makes for an unreadable
 `/proc/<pid>/cmdline`: the command name in brackets, followed by `<defunct>` for
-a zombie. `pgrep -f` matches the pattern against that text. On Linux every user
-can read every process's command line, so procps-ng matches the real one. With
-the helper, the tools read every process's command line.
+a zombie. `pgrep -a` prints that text, `pgrep -a -Q` prints `-`, and `pgrep -f`
+matches the pattern against that text. On Linux, procfs normally lets every user
+read every process's command line, so procps-ng prints and matches the real one,
+although a `hidepid` mount option can withhold them. With the helper, the tools
+can read the command line of every process apart from `kernel_task`.
 
 ## Environment
 
@@ -470,16 +472,73 @@ characters. Two differences follow in locales other than C:
 ## Escaped text
 
 procps-ng replaces each byte of a character that is unsafe on a terminal, and
-each byte of an invalid sequence, with `?` in command names, command lines and
-environment strings, before it matches or prints them. In a UTF-8 locale, it
-keeps valid characters other than control and private-use characters. In any
-other locale, it keeps the bytes that `isprint` accepts. glibc's locales
-classify every character other than a control character as printable, whereas
-Darwin's `isprint` also accepts bytes that encode no character, such as 0xae in
-ISO 8859-7. The tools therefore decode each of the 256 byte values with `iconv`
-in the locale's encoding, and keep a byte that decodes to a character other than
-a control character. If `iconv` does not know the encoding, the tools keep the
-printable characters of ASCII. Apple's `iconv` and glibc's character maps
-disagree about some bytes: in ARMSCII-8, about 0xa1, 0xa4, 0xa5, 0xa9, 0xab,
-0xac and 0xff, and in GBK, about 0x80. For those bytes, the tools follow
-`iconv`.
+each byte of an invalid sequence, with `?` in command names, thread names,
+command lines and environment strings, before it matches or prints them. In a
+UTF-8 locale, it keeps valid characters other than control and private-use
+characters. In any other locale, it keeps the bytes that `isprint` accepts.
+glibc's locales classify every character other than a control character as
+printable, whereas Darwin's `isprint` also accepts bytes that encode no
+character, such as 0xae in ISO 8859-7. The tools therefore decode each of the
+256 byte values with `iconv` in the locale's encoding, and keep a byte that
+decodes to a character other than a control character. If `iconv` does not know
+the encoding, the tools keep the printable characters of ASCII. Apple's `iconv`
+and glibc's character maps disagree about some bytes: in ARMSCII-8, about 0xa1,
+0xa4, 0xa5, 0xa9, 0xab, 0xac and 0xff, and in GBK, about 0x80. For those bytes,
+the tools follow `iconv`.
+
+## Threads
+
+With `-w`, procps-ng's `pgrep` selects and lists each thread of a process. Linux
+calls each thread a task. `pgrep` lists Darwin's threads in place of Linux's, in
+ascending order of thread ID within each process. The thread IDs come from
+`proc_pidinfo` with `PROC_PIDLISTTHREADIDS`, and each thread's name and run
+state from `pth_name` and `pth_run_state` of `PROC_PIDTHREADID64INFO`.
+
+- A thread's ID is its 64-bit Darwin thread ID, which is unique among threads. A
+  Linux thread ID is a pid, and the main thread's ID equals the process ID, so
+  `kill $(pgrep -w name)` signals the threads' processes on Linux. Darwin's
+  thread IDs are not pids, but a thread created soon after boot can have an ID
+  that equals the pid of an unrelated process, which `kill` would then signal.
+  Do not pass the output of `pgrep -w` to `kill` on macOS.
+- Darwin does not mark a process's main thread. Darwin assigns thread IDs in
+  increasing order, so the main thread, the first thread of the process, has the
+  lowest ID. The tools treat that thread as the main thread. Once the main
+  thread has exited, the thread with the next lowest ID is treated as the main
+  thread, whereas Linux keeps the exited main thread as a zombie task.
+- On Linux, a process's name is its main thread's name, so a main thread that
+  sets its own name renames the process, and `pgrep` matches the new name. The
+  tools give the process and its main thread the process's name from `p_comm`,
+  and `pgrep` does not match a name that the main thread set. Many macOS
+  programs set a name for their main thread. Rust's runtime gives it the name
+  `main`, and on one macOS 27 system, 265 of 1090 processes had a named main
+  thread, most often `MainThread` or `main`. If the tools used those names,
+  `pgrep` would not select these processes by their program's name.
+- Any other thread has the name that it set with `pthread_setname_np`, cut to 15
+  bytes, the longest name that Linux keeps. A thread that has not set a name has
+  the process's name, because a Linux thread inherits the name of the thread
+  that created it, which is usually the process's name.
+- A thread's state letter comes from its run state: a running thread is `R`, a
+  thread in an uninterruptible wait is `D`, and any other thread is `S`, as for
+  a process under [Process state][process-state]. Every thread of a zombie or a
+  stopped process has the process's letter.
+- Darwin reports no start time for a thread, so `-n`, `-o` and `-O` use the
+  process's start time for each of its threads. On Linux, each thread has its
+  own start time, so `pgrep -w -n` selects the newest thread on the system, and
+  `pgrep -w -o` the oldest. The tools select the thread with the highest ID in
+  the newest process, or the thread with the lowest ID in the oldest process.
+- procps-ng compares each thread's ID with the pid of `pgrep` itself and, with
+  `-A`, with the pids of `pgrep`'s ancestors, so on Linux it leaves out only the
+  main threads of those processes. The tools leave out the main thread of each
+  ancestor too, and every thread of their own process. procps-ng's `pgrep` has
+  one thread, so on Linux the tool has no other thread to leave out.
+- When the tools cannot read the threads of a process, or the process has none,
+  they list the process as one task whose ID is the pid, as a single-threaded
+  process is on Linux. Without root or the helper, Darwin refuses
+  `PROC_PIDLISTTHREADIDS` for another user's process, so `pgrep -w` lists each
+  such process once, by its pid, and `pgrep -w -c` counts it once. The output of
+  `pgrep -w` can therefore mix pids and Darwin thread IDs. With procfs's default
+  permissions, procps-ng lists every thread, because every user can read
+  `/proc/<pid>/task`, although a mount option such as `hidepid` can withhold
+  other users' processes. The helper reads the threads of every process.
+
+[process-state]: #process-state

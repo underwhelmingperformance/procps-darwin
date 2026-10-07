@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "-Q without -l or -a prints only the pids"
+command = ["pgrep", "-s", "0", "-Q", "harness-it"]
+
+[[fixture]]
+name = "q1"
+comm = "harness-it's"

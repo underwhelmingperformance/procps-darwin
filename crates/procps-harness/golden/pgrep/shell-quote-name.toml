@@ -1,0 +1,8 @@
+status = 0
+stdout = '''
+{q1} 'harness-it'\''s'
+'''
+stderr = ""
+
+[fixtures]
+q1 = "running"

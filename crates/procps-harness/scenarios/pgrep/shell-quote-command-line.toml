@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "-Q with -a quotes each argument that the shell would otherwise split or expand"
+command = ["pgrep", "-s", "0", "-a", "-Q", "harness-it"]
+
+[[fixture]]
+name = "q1"
+comm = "harness-it's"

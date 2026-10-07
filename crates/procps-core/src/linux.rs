@@ -4,7 +4,7 @@
 
 use std::{fmt, os::unix::ffi::OsStrExt};
 
-use darwin_proc::{RunState, SchedulingPolicy, Status};
+use darwin_proc::{RunState, SchedulingPolicy, Status, ThreadInfo};
 
 use crate::{Field, Process};
 
@@ -440,5 +440,87 @@ impl Process {
         let comm = self.info.comm.as_bytes();
 
         &comm[..comm.len().min(COMMAND_NAME_LENGTH)]
+    }
+
+    /// The name of `thread`, which is one of this process's threads, cut to 15
+    /// bytes. Linux keeps at most 15 bytes of a name. A thread that has not set
+    /// a name has the process's name, because a Linux thread inherits the name
+    /// of the thread that created it, which is usually the process's name.
+    #[must_use]
+    pub(crate) fn linux_thread_name<'a>(&'a self, thread: &'a ThreadInfo) -> &'a [u8] {
+        if thread.name.is_empty() {
+            return self.linux_comm();
+        }
+
+        let name = thread.name.as_bytes();
+
+        &name[..name.len().min(COMMAND_NAME_LENGTH)]
+    }
+
+    /// The state letter of `thread`, one of this process's threads, as
+    /// procps-ng shows it for a Linux thread. Every thread of a zombie or a
+    /// stopped process has the process's letter: `Z`, `T` or `t`. Otherwise a
+    /// running thread is `R`, a thread in an uninterruptible wait is `D`, and
+    /// any other thread is `S`.
+    #[must_use]
+    pub(crate) fn linux_thread_state(&self, thread: &ThreadInfo) -> char {
+        match self.info.status {
+            Status::Zombie => 'Z',
+            Status::Stopped if self.info.flags.is_traced() => 't',
+            Status::Stopped => 'T',
+            _ => match thread.run_state {
+                RunState::Running => 'R',
+                RunState::Uninterruptible => 'D',
+                RunState::Stopped | RunState::Waiting | RunState::Halted | RunState::Other(_) => {
+                    'S'
+                }
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use darwin_proc::{ProcessFlags, RunState, Status};
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
+
+    use crate::testing::{process, thread};
+
+    /// `P_TRACED` from `<sys/proc.h>`: a debugger is attached.
+    const P_TRACED: u32 = 0x800;
+
+    #[rstest]
+    #[case::running(Status::Running, 0, RunState::Running, 'R')]
+    #[case::uninterruptible(Status::Running, 0, RunState::Uninterruptible, 'D')]
+    #[case::waiting(Status::Running, 0, RunState::Waiting, 'S')]
+    #[case::halted(Status::Running, 0, RunState::Halted, 'S')]
+    #[case::zombie(Status::Zombie, 0, RunState::Running, 'Z')]
+    #[case::stopped(Status::Stopped, 0, RunState::Running, 'T')]
+    #[case::traced(Status::Stopped, P_TRACED, RunState::Running, 't')]
+    #[case::thread_stopped(Status::Running, 0, RunState::Stopped, 'S')]
+    #[case::other(Status::Running, 0, RunState::Other(9), 'S')]
+    fn a_thread_has_a_linux_state(
+        #[case] status: Status,
+        #[case] flags: u32,
+        #[case] run_state: RunState,
+        #[case] expected: char,
+    ) {
+        let mut process = process(10, "worker");
+        process.info.status = status;
+        process.info.flags = ProcessFlags::from(flags);
+        let thread = thread(1, b"", run_state);
+
+        assert_eq!(process.linux_thread_state(&thread), expected);
+    }
+
+    #[rstest]
+    #[case::unnamed("", b"worker")]
+    #[case::named("io", b"io")]
+    #[case::long("0123456789abcdefgh", b"0123456789abcde")]
+    fn a_thread_has_a_linux_name(#[case] name: &str, #[case] expected: &[u8]) {
+        let thread = thread(1, name.as_bytes(), RunState::Waiting);
+
+        assert_eq!(process(10, "worker").linux_thread_name(&thread), expected);
     }
 }

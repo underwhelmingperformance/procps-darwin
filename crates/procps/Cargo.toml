@@ -22,6 +22,7 @@ workspace = true
 assert_matches.workspace = true
 libtest-mimic.workspace = true
 pretty_assertions.workspace = true
+procps-core = { workspace = true, features = ["testing"] }
 procps-harness.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

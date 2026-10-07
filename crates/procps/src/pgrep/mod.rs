@@ -10,6 +10,7 @@ mod getopt;
 mod mode;
 mod options;
 mod pidfile;
+mod quote;
 mod run;
 mod select;
 mod table;

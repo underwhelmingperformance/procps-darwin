@@ -1,0 +1,8 @@
+status = 0
+stdout = '''
+{q1} 'harness-it'\''s' --procps-harness-fixture
+'''
+stderr = ""
+
+[fixtures]
+q1 = "running"
