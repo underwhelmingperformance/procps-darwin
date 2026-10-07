@@ -34,6 +34,10 @@ log. The log can record which users ran the tools and when: every request at the
 `debug` level, and requests that exceed a limit at the default level. Only root
 and members of the `admin` group can read it.
 
+[`helper-security.md`][security] describes what the helper defends against.
+
+[security]: helper-security.md
+
 ## Installing with nix-darwin
 
 If the helper is installed without nix-darwin, remove that installation first,
