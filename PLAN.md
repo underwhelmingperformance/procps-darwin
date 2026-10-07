@@ -208,7 +208,7 @@ set size, scheduling policy names and the `f` flags column.
 | Crate            | Contents                                                                                                                                                                                                                                                                                                                                                                      |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `darwin-proc`    | FFI declarations that the `libc` crate lacks, and safe readers for processes, threads, memory regions and system statistics. It also compiles glibc's regular expression code, sets locales as glibc reads their names, and restores the state that Rust's runtime changes at start-up. Errors distinguish a process that has exited, a denied read, and an unsupported call. |
-| `procps-core`    | Domain model, the `ProcessSource` trait and its implementations, the helper protocol and client, process selection shared by all four tools, and formatting helpers (times, sizes, terminal names, cached user and group names).                                                                                                                                              |
+| `procps-core`    | Domain model, the `ProcessSource` trait and its implementations, the helper protocol and client, procps-ng's escaping, and formatting helpers (times, sizes, terminal names, cached user and group names).                                                                                                                                                                    |
 | `procps-helperd` | The root helper daemon.                                                                                                                                                                                                                                                                                                                                                       |
 | `procps`         | The `ps`, `top`, `pgrep` and `pkill` binaries.                                                                                                                                                                                                                                                                                                                                |
 
@@ -415,9 +415,9 @@ is implemented. Its test fails when the scenario matches, so that the mark is
 removed.
 
 The golden files are TOML, which crane's `cleanCargoSource` keeps, so the flake
-checks run the comparison too. The first two scenarios, `pgrep` by name and
-`ps -o pid=,comm=`, are pending until phases 4 and 5. User and group names, and
-uids, are not masked yet; the first `ps` scenario with user columns needs that.
+checks run the comparison too. The `ps -o pid=,comm=` scenario is pending until
+phase 5. User and group names, and uids, are not masked yet; the first `ps`
+scenario with user columns needs that.
 
 ### Phase 1: Darwin data layer (`darwin-proc`)
 
@@ -904,12 +904,13 @@ glibc's `atoi` reads them, which truncates the number to an `int`.
 
 `--cgroup`, `--ns` and `--nslist`, `pkill`'s `-q` and `-m`, and the names of
 Linux signals that Darwin lacks are handled as procps-ng handles them. After
-procps-ng's checks, where procps-ng would start to select processes, the parser
-refuses the first of these options that is still in effect, with status 2.
-`--ns` with a pid that `atoi` reads as 0 is not refused, because procps-ng's
-case for `--ns` then falls through to the case for `-r` and uses the argument as
-the list of run states. `pgrep` accepts `--queue`, `--mrelease` and `--echo` and
-ignores them, as procps-ng does.
+procps-ng's checks, the parser records the first of these options that is still
+in effect, and the tools refuse it with status 2 where procps-ng would start to
+select processes. procps-ng compiles the pattern there first, so a regex error
+comes before the refusal. `--ns` with a pid that `atoi` reads as 0 is not
+refused, because procps-ng's case for `--ns` then falls through to the case for
+`-r` and uses the argument as the list of run states. `pgrep` accepts `--queue`,
+`--mrelease` and `--echo` and ignores them, as procps-ng does.
 
 A later `--signal` replaces a Linux signal, as it replaces any signal. `pkill`
 applies `-<signal>` before every `--signal`, wherever `-<signal>` appears.
@@ -963,17 +964,53 @@ descriptor that stays closed. With `SIGPIPE` inherited as ignored, a write to a
 closed pipe fails with `EPIPE`, which the tools do not report, and otherwise
 `SIGPIPE` ends them.
 
-#### 4.2 Matching
+#### 4.2 Matching (done)
 
 Match by pattern, `-f`, `-i`, `-x`, `-v`, `-u`, `-U`, `-G`, `-g`, `-P`, `-s`,
 `-t`, `-p`, `-F`, `-L`, `-r`, `-H` (from the caught-signal mask), `-O`, `--env`,
 `-n`, `-o` and `-A`, excluding the tool's own process.
 
+`procps::pgrep` ports procps-ng's `select_procs`. It takes a single snapshot of
+all processes. The snapshot includes the arguments only for `-f` and the
+environment only for `--env`. It includes the threads only for `-r`, because the
+threads decide the state letter. The selection applies the filters in
+procps-ng's order, matches the pattern, and keeps one process for `-n` or `-o`,
+with procps-ng's tie-break on the pid. Like procps-ng, it compares start times,
+and computes the elapsed time for `-O`, in clock ticks since boot, at 100 ticks
+a second.
+
+The pattern is matched against the command name, or with `-f` the command line,
+as procps-ng shows them. `procps-core` ports the escaping of `library/escape.c`,
+and the construction of the command line in `library/readproc.c`
+(`read_unvectored` and `fill_cmdline_cvt`). The escaping and `regcomp` depend on
+the locale's character encoding, so `pgrep` sets the locale from the environment
+before it compiles the pattern. It calls `darwin_proc::set_locale`, which sets
+the calling thread's locale from the environment as procps-ng's
+`setlocale(LC_ALL, "")` sets the process's locale. The call fails as a whole
+when the environment sets any category to a locale that does not exist, and the
+locale then stays C. `darwin_proc::set_locale` reads locale names as glibc reads
+them, so `C.utf8` is C.UTF-8 and `en_US` is an ISO 8859-1 locale. glibc's regex
+code, compiled outside glibc, has no collation rules of its own. It reads only
+the name of the `LC_COLLATE` locale, to reject a range with a multi-byte end in
+glibc's locales without collation rules. `docs/mappings.md` describes the
+resulting differences in ranges and equivalence classes.
+
+Linux does not expose a process with pid 0 in `/proc`, so procps-ng never lists
+one. The selection therefore leaves out `kernel_task`, which has pid 0 on
+Darwin.
+
+`pgrep` prints the pids with the delimiter, or their number with `-c`, and
+nothing with `--quiet`. If no process matches, it prints procps-ng's warning
+when `-f` is not given and the pattern is longer than 15 bytes without a `|` or
+`[`. The other output options are task 4.3, and `pkill`'s signals are task 4.4.
+Until then, `pkill` always exits with status 3, and so does `pgrep` with `-l`,
+`-a`, `-Q` or `-w`.
+
 #### 4.3 Output
 
-Implement the output options `-l`, `-a`, `-d`, `-c`, `-Q`, `--quiet`, and `-e`
-in `pkill`. `-w` lists 64-bit Darwin thread IDs in place of Linux TIDs; document
-this in `docs/mappings.md`.
+Implement the output options `-l`, `-a` and `-Q`, and `pkill`'s `-e`. `-w` lists
+64-bit Darwin thread IDs in place of Linux TIDs; document this in
+`docs/mappings.md`.
 
 #### 4.4 Signals
 

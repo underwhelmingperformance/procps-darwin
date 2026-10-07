@@ -68,6 +68,7 @@ path = [
   "crates/procps-harness/golden/pgrep/empty-list.toml",
   "crates/procps-harness/golden/pgrep/empty-long-option.toml",
   "crates/procps-harness/golden/pgrep/empty-user-list.toml",
+  "crates/procps-harness/golden/pgrep/environment-empty-list.toml",
   "crates/procps-harness/golden/pgrep/help-before-invalid-option.toml",
   "crates/procps-harness/golden/pgrep/help-short.toml",
   "crates/procps-harness/golden/pgrep/help.toml",

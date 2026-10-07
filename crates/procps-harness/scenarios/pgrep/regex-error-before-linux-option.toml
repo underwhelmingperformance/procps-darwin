@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a regex error comes before the refusal of an option for a Linux concept"
+command = ["pgrep", "-s", "0", "--cgroup", "a", "("]

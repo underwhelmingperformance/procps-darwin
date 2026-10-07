@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "in C.UTF-8, a range with an end outside ASCII is a collation error"
+command = ["pgrep", "-s", "0", "-f", "caf[à-ü]$"]
+
+[environment]
+LC_ALL = "C.UTF-8"

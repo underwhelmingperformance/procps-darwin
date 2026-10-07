@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "glibc reads {,2} as {0,2}"
+command = ["pgrep", "-s", "0", "harness-dz{{,2}}5"]
+
+[[fixture]]
+name = "n1"
+comm = "harness aa"
+
+[[fixture]]
+name = "d1"
+comm = "harness-d5"

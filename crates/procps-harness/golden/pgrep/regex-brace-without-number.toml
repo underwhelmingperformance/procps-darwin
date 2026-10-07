@@ -1,0 +1,8 @@
+status = 2
+stdout = ""
+stderr = '''
+pgrep: regex error: Invalid content of \{\}
+'''
+
+[fixtures]
+d1 = "running"

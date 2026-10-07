@@ -11,6 +11,7 @@ mod mode;
 mod options;
 mod pidfile;
 mod run;
+mod select;
 mod table;
 mod usage;
 

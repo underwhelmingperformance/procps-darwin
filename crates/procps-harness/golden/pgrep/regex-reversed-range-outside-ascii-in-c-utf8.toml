@@ -1,0 +1,5 @@
+status = 2
+stdout = ""
+stderr = """
+pgrep: regex error: Invalid collation character
+"""

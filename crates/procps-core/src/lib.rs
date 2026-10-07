@@ -22,7 +22,7 @@ pub use budget::Budget;
 pub use choice::{ChoiceError, HelperOrLocal, SOURCE_VARIABLE, Source, SourceChoice};
 pub use escape::{Charset, PrintableBytes};
 pub use field::Field;
-pub use linux::{LinuxPolicy, LinuxPriority, LinuxSizes, LinuxState};
+pub use linux::{COMMAND_NAME_LENGTH, LinuxPolicy, LinuxPriority, LinuxSizes, LinuxState};
 pub use report::ErrorChain;
 pub use request::{FieldGroup, SnapshotRequest};
 pub use snapshot::{Process, RegionTotals, Snapshot, System, Usage};

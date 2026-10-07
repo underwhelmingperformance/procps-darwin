@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "in C.UTF-8, a range with ASCII ends matches"
+command = ["pgrep", "-s", "0", "^harness-[a-c]1$"]
+
+[environment]
+LC_ALL = "C.UTF-8"
+
+[[fixture]]
+name = "b1"
+comm = "harness-b1"
+
+[[fixture]]
+name = "d1"
+comm = "harness-d1"

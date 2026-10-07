@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a brace at the start of the pattern is a regex error"
+command = ["pgrep", "-s", "0", "{{"]
+
+[[fixture]]
+name = "d1"
+comm = "harness-d5"

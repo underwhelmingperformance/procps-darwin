@@ -36,6 +36,7 @@ harness = false
 clap.workspace = true
 darwin-proc.workspace = true
 libc.workspace = true
+procps-core.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 thiserror.workspace = true
 tracing.workspace = true
