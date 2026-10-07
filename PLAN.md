@@ -205,12 +205,12 @@ set size, scheduling policy names and the `f` flags column.
 
 ### Crates
 
-| Crate            | Contents                                                                                                                                                                                                                                                                                                                            |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `darwin-proc`    | FFI declarations that the `libc` crate lacks, and safe readers for processes, threads, memory regions and system statistics. It also sets locales as glibc reads their names, and restores the state that Rust's runtime changes at start-up. Errors distinguish a process that has exited, a denied read, and an unsupported call. |
-| `procps-core`    | Domain model, the `ProcessSource` trait and its implementations, the helper protocol and client, process selection shared by all four tools, and formatting helpers (times, sizes, terminal names, cached user and group names).                                                                                                    |
-| `procps-helperd` | The root helper daemon.                                                                                                                                                                                                                                                                                                             |
-| `procps`         | The `ps`, `top`, `pgrep` and `pkill` binaries.                                                                                                                                                                                                                                                                                      |
+| Crate            | Contents                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `darwin-proc`    | FFI declarations that the `libc` crate lacks, and safe readers for processes, threads, memory regions and system statistics. It also compiles glibc's regular expression code, sets locales as glibc reads their names, and restores the state that Rust's runtime changes at start-up. Errors distinguish a process that has exited, a denied read, and an unsupported call. |
+| `procps-core`    | Domain model, the `ProcessSource` trait and its implementations, the helper protocol and client, process selection shared by all four tools, and formatting helpers (times, sizes, terminal names, cached user and group names).                                                                                                                                              |
+| `procps-helperd` | The root helper daemon.                                                                                                                                                                                                                                                                                                                                                       |
+| `procps`         | The `ps`, `top`, `pgrep` and `pkill` binaries.                                                                                                                                                                                                                                                                                                                                |
 
 The `libc` crate (0.2.189) already declares `proc_pidinfo`, `proc_pid_rusage`,
 `proc_listallpids`, `proc_bsdinfo`, `proc_taskinfo`, `proc_threadinfo`,
@@ -296,10 +296,11 @@ Task 3.2 records where each Darwin extension field falls.
 
 ### Other implementation choices
 
-- Pattern matching in `pgrep`, `pkill` and `ps -C` uses the system's `regcomp`
-  and `regexec` with `REG_EXTENDED`, as procps-ng does. The Rust `regex` crate's
-  syntax differs from POSIX extended regular expressions, for example in bracket
-  expressions and back-references.
+- Pattern matching in `pgrep` and `pkill` uses glibc's `regcomp` and `regexec`
+  with `REG_EXTENDED`, as procps-ng does. `darwin-proc` compiles glibc 2.44's
+  regular expression code from source, for the reasons in `docs/mappings.md`.
+  The Rust `regex` crate's syntax differs from POSIX extended regular
+  expressions, for example in bracket expressions and back-references.
 - `top` draws the screen itself on top of `crossterm` for raw mode, the
   alternate screen and resize events. procps-ng's layout rules are ported
   directly, and a widget library would add a layout model that has to be worked

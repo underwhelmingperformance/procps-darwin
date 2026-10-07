@@ -37,6 +37,7 @@ _: {
         ];
 
       RUSTFMT = rustfmtBin;
+      inherit (config.procps-darwin.commonArgs) NIX_CC_WRAPPER_SUPPRESS_TARGET_WARNING;
 
       # Nix computes the digest when it evaluates the shell, so a shell that
       # direnv restores from its cache keeps the digest of the files that it

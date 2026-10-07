@@ -7,6 +7,7 @@ use std::{
     env,
     ffi::{CStr, CString},
     fs,
+    marker::PhantomData,
     sync::{Mutex, PoisonError},
 };
 
@@ -408,7 +409,9 @@ const GLIBC_LACKS: [&str; 3] = ["fa_AF", "se_FI", "sr_YU"];
 /// if the environment sets any category to a locale that does not exist, and
 /// the locale then stays as it was. The tools use `LC_CTYPE`, which decides the
 /// character encoding, how characters are classified and how their case
-/// folds.
+/// folds. A [`Regex`](crate::Regex) also reads the name of the `LC_COLLATE`
+/// locale, to tell whether glibc would have collation rules for a locale of
+/// that name.
 ///
 /// This function reads locale names as glibc reads them:
 ///
@@ -436,7 +439,9 @@ const GLIBC_LACKS: [&str; 3] = ["fa_AF", "se_FI", "sr_YU"];
 /// of `LC_COLLATE`, `LC_CTYPE`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME` and
 /// `LC_MESSAGES` in that order.
 ///
-/// Returns the new locale, or `None` if the call fails.
+/// Returns the new locale, or `None` if the call fails. Call this before
+/// compiling a [`Regex`](crate::Regex), because `regcomp` reads the pattern in
+/// the calling thread's locale.
 ///
 /// ```
 /// let locale = darwin_proc::set_locale(c"C").expect("the C locale exists");
@@ -611,6 +616,17 @@ impl CaseFolding {
 /// Dropping it frees the object.
 pub(crate) struct OwnedLocale(libc::locale_t);
 
+// SAFETY: Darwin counts a locale object's references atomically. It changes an
+// object after creating it only in the conversion states that functions such as
+// `mbrtowc` use when they are given no state, and in the `LC_NUMERIC` cache of
+// the `strtod` family. This crate calls neither kind of function with these
+// objects, and glibc's regular expression code passes its own state to every
+// conversion, so several threads can use one object at the same time.
+unsafe impl Send for OwnedLocale {}
+
+// SAFETY: as for `Send`.
+unsafe impl Sync for OwnedLocale {}
+
 impl OwnedLocale {
     /// The locale with the names in `parts`: a single name for all categories,
     /// or one name for each category in [`CATEGORIES`]. Darwin's `newlocale`
@@ -652,6 +668,30 @@ impl OwnedLocale {
 
         (!locale.is_null()).then_some(Self(locale))
     }
+
+    /// A copy of the calling thread's locale, or `None` if there is not enough
+    /// memory.
+    pub(crate) fn current() -> Option<Self> {
+        // SAFETY: `uselocale` with a null pointer returns the calling thread's
+        // locale without changing it, and `duplocale` copies it.
+        let locale = unsafe { libc::duplocale(libc::uselocale(std::ptr::null_mut())) };
+
+        (!locale.is_null()).then_some(Self(locale))
+    }
+
+    /// Makes this locale the calling thread's locale until the guard is
+    /// dropped.
+    pub(crate) fn enter(&self) -> Entered<'_> {
+        // SAFETY: `self.0` is a locale object, which outlives the guard.
+        // `uselocale` returns the thread's previous locale, which the guard
+        // restores.
+        let previous = unsafe { libc::uselocale(self.0) };
+
+        Entered {
+            previous,
+            locale: PhantomData,
+        }
+    }
 }
 
 impl Drop for OwnedLocale {
@@ -661,8 +701,24 @@ impl Drop for OwnedLocale {
         }
 
         // SAFETY: `self.0` is a locale object that this crate owns, and no
-        // thread uses it: `Installed` stops using it before it is dropped.
+        // thread uses it: `Installed` and `Entered` stop using it before
+        // it is dropped.
         unsafe { libc::freelocale(self.0) };
+    }
+}
+
+/// The calling thread uses an [`OwnedLocale`] until this guard is dropped,
+/// which restores the thread's previous locale.
+pub(crate) struct Entered<'a> {
+    previous: libc::locale_t,
+    locale: PhantomData<&'a OwnedLocale>,
+}
+
+impl Drop for Entered<'_> {
+    fn drop(&mut self) {
+        // SAFETY: `previous` is the locale that the thread used before, which
+        // is `LC_GLOBAL_LOCALE` or a locale object that is still alive.
+        unsafe { libc::uselocale(self.previous) };
     }
 }
 
