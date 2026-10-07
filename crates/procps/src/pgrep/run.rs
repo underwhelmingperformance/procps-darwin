@@ -10,14 +10,20 @@
 
 // Translated from procps-ng v4.0.7 src/pgrep.c.
 
-use std::{ffi::OsStr, io::Write, os::unix::ffi::OsStrExt, process::ExitCode};
+use std::{
+    ffi::OsStr,
+    io::Write,
+    os::unix::ffi::{OsStrExt, OsStringExt},
+    process::ExitCode,
+};
 
 use darwin_proc::{Locale, Pid};
-use procps_core::{Charset, ProcessSource, SourceChoice};
+use procps_core::{Charset, LinuxTask, ProcessSource, SourceChoice};
 
 use crate::pgrep::{
     Command, Mode, Options, PgrepError,
-    options::{Listing, Report, Tasks},
+    options::{Listing, Report},
+    quote::shell_quote,
     select::{self, Invocation, Selection, is_long_match},
     usage,
 };
@@ -103,9 +109,8 @@ pub fn main(
 /// Takes a snapshot from `source`, selects the processes in it that
 /// `selection` describes, and reports them as procps-ng's `pgrep` does.
 /// Returns status 0 if any process matches, 1 if none does, and an error's
-/// status if the snapshot fails. `pkill`, and `pgrep` with `-l`, `-a`, `-Q` or
-/// `-w`, exit with status 3 before the snapshot, because `pkill`'s signals and
-/// these output options are not implemented yet.
+/// status if the snapshot fails. `pkill` exits with status 3 before the
+/// snapshot, because it cannot send signals yet.
 pub(crate) fn run(
     invocation: &Invocation<'_>,
     selection: &Selection<'_>,
@@ -116,21 +121,8 @@ pub(crate) fn run(
     let Invocation { mode, program, .. } = *invocation;
     let options = selection.options();
 
-    let unimplemented = [
-        (mode == Mode::Pkill, "signalling"),
-        (options.output.report == Report::List(Listing::Names), "-l"),
-        (
-            options.output.report == Report::List(Listing::CommandLines),
-            "-a",
-        ),
-        (options.output.shell_quote, "-Q"),
-        (options.tasks == Tasks::Threads, "-w"),
-    ]
-    .into_iter()
-    .find_map(|(used, feature)| used.then_some(feature));
-
-    if let Some(feature) = unimplemented {
-        return PgrepError::Unimplemented(feature).report(mode, program, stderr);
+    if mode == Mode::Pkill {
+        return PgrepError::Unimplemented.report(mode, program, stderr);
     }
 
     let snapshot = match source.snapshot(&select::request(options)) {
@@ -149,7 +141,8 @@ pub(crate) fn run(
 }
 
 /// Writes procps-ng's warning about a long pattern, then the count of the
-/// `selected` processes, or their pids.
+/// `selected` tasks, or their IDs, with their names or command lines for `-l`
+/// or `-a`.
 ///
 /// procps-ng prints each line with one `printf` call, and goes on after a call
 /// fails. When a flush fails, the stream discards what glibc discards: the
@@ -158,7 +151,7 @@ pub(crate) fn run(
 fn report(
     invocation: &Invocation<'_>,
     options: &Options,
-    selected: &[&procps_core::Process],
+    selected: &[LinuxTask<'_>],
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) {
@@ -189,15 +182,63 @@ fn report(
         Report::List(_) => {}
     }
 
-    for (index, process) in selected.iter().enumerate() {
+    let listed = matches!(
+        options.output.report,
+        Report::List(Listing::Names | Listing::CommandLines)
+    );
+
+    for (index, task) in selected.iter().enumerate() {
         let delimiter = if index + 1 == selected.len() {
             b"\n"
         } else {
             options.output.delimiter.as_bytes()
         };
-        let line = [process.info.pid.to_string().as_bytes(), delimiter].concat();
+        let mut line = task.id().to_string().into_bytes();
 
+        if listed {
+            line.push(b' ');
+            line.extend_from_slice(&text(options, task, invocation.charset));
+        }
+
+        line.extend_from_slice(delimiter);
         let _ = stdout.write_all(&line);
+    }
+}
+
+/// The longest text that procps-ng prints after a task's ID. procps-ng's
+/// buffer has `get_arg_max()` bytes. `get_arg_max` caps `sysconf(_SC_ARG_MAX)`
+/// at 128 KiB, and glibc's `sysconf(_SC_ARG_MAX)` on Linux is at least 128
+/// KiB, so the buffer has 128 KiB on Linux. `strncpy` leaves the last byte for
+/// the NUL. procps-core cuts each argument of `CMDLINE_V` to the same length,
+/// but that limit comes from the buffers of procps-ng's library, not from
+/// `pgrep`, so either value can change without the other.
+const TEXT_LENGTH: usize = 128 * 1024 - 1;
+
+/// The text that procps-ng prints after a task's ID, cut to the length of
+/// procps-ng's buffer. Quoting can make the text longer than the buffer, and
+/// procps-ng cuts it after byte 131071, even inside a multi-byte character.
+fn text(options: &Options, task: &LinuxTask<'_>, charset: Charset) -> Vec<u8> {
+    let mut text = full_text(options, task, charset);
+    text.truncate(TEXT_LENGTH);
+
+    text
+}
+
+/// The command line for `-a`, or the name otherwise, quoted for the shell
+/// with `-Q`.
+fn full_text(options: &Options, task: &LinuxTask<'_>, charset: Charset) -> Vec<u8> {
+    let command_line = options.output.report == Report::List(Listing::CommandLines);
+
+    match (options.output.shell_quote, command_line) {
+        (true, true) => shell_quote(
+            task.process()
+                .linux_command_line_vector(charset)
+                .iter()
+                .map(|argument| argument.as_bytes()),
+        ),
+        (true, false) => shell_quote([task.command(charset).as_bytes()]),
+        (false, true) => task.command_line(charset).into_vec(),
+        (false, false) => task.command(charset).into_vec(),
     }
 }
 
@@ -210,13 +251,12 @@ mod tests {
         time::{Duration, SystemTime},
     };
 
-    use darwin_proc::{
-        AccountingFlags, Credentials, Gid, Pid, ProcessFlags, ProcessInfo, SignalSet, Status, Uid,
-    };
+    use darwin_proc::{Pid, RunState};
     use pretty_assertions::assert_eq;
     use procps_core::{
         Charset, Field, FixtureSource, Process, ProcessSource, Snapshot, SnapshotRequest,
         SourceError,
+        testing::{process, thread},
     };
     use rstest::rstest;
 
@@ -240,38 +280,6 @@ mod tests {
         }
     }
 
-    fn process(pid: i32, comm: &str) -> Process {
-        let uid = Uid::from(501);
-        let gid = Gid::from(20);
-        let info = ProcessInfo {
-            pid: Pid::from(pid),
-            ppid: Pid::from(1),
-            pgid: Pid::from(pid),
-            terminal: None,
-            credentials: Credentials {
-                ruid: uid,
-                euid: uid,
-                svuid: uid,
-                rgid: gid,
-                egid: gid,
-                svgid: gid,
-                groups: vec![gid],
-            },
-            nice: 0,
-            priority: 31,
-            status: Status::Running,
-            flags: ProcessFlags::default(),
-            accounting: AccountingFlags::default(),
-            session_leader: false,
-            start_time: SystemTime::UNIX_EPOCH,
-            comm: comm.into(),
-            ignored_signals: SignalSet::default(),
-            caught_signals: SignalSet::default(),
-        };
-
-        Process::from_identity(info, Field::Unsupported, Field::Unsupported)
-    }
-
     /// A source whose every snapshot fails.
     struct TimingOut;
 
@@ -288,11 +296,109 @@ mod tests {
         arguments: &[&str],
         stderr: &mut impl Write,
     ) -> Result<(String, ExitCode), Box<dyn std::error::Error>> {
-        let source = FixtureSource::new(
-            SystemTime::UNIX_EPOCH,
-            Duration::ZERO,
+        pgrep_in(
             vec![process(10, "sleep"), process(20, "sleep")],
+            arguments,
+            stderr,
+        )
+    }
+
+    #[test]
+    fn a_long_text_is_cut_where_procps_ng_cuts_it() -> Result<(), Box<dyn std::error::Error>> {
+        let mut process = process(10, "sh");
+        process.arguments = Some(Field::Available(vec!["'".repeat(40_000).into()]));
+        let quoted = format!("'{}'", "'\\''".repeat(40_000));
+
+        assert_eq!(
+            pgrep_output(vec![process], &["pgrep", "-a", "-Q", "sh"])?,
+            (
+                format!("10 {}\n", &quoted[..131_071]),
+                String::new(),
+                ExitCode::SUCCESS
+            )
         );
+
+        Ok(())
+    }
+
+    // procps-ng's fallback for a command line that it cannot read uses each
+    // task's own name.
+    #[test]
+    fn a_thread_without_readable_arguments_is_listed_by_its_own_name()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut process = process(30, "x");
+        process.arguments = Some(Field::Denied);
+        process.threads = Some(Field::Available(vec![
+            thread(300, b"", RunState::Waiting),
+            thread(301, b"io", RunState::Waiting),
+        ]));
+
+        assert_eq!(
+            pgrep_output(vec![process], &["pgrep", "-w", "-a", "."])?,
+            (
+                "300 [x]\n301 [io]\n".to_owned(),
+                String::new(),
+                ExitCode::SUCCESS
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn denied_arguments_are_quoted_as_a_dash() -> Result<(), Box<dyn std::error::Error>> {
+        let mut process = process(30, "x");
+        process.arguments = Some(Field::Denied);
+
+        assert_eq!(
+            pgrep_output(vec![process], &["pgrep", "-a", "-Q", "x"])?,
+            ("30 -\n".to_owned(), String::new(), ExitCode::SUCCESS)
+        );
+
+        Ok(())
+    }
+
+    /// The standard output, standard error and exit status of `pgrep` with
+    /// `arguments`, for two processes with arguments. The first has two
+    /// threads, and the source could not read the threads of the second.
+    fn pgrep_listing(
+        arguments: &[&str],
+    ) -> Result<(String, String, ExitCode), Box<dyn std::error::Error>> {
+        let mut first = process(10, "sleep");
+        first.arguments = Some(Field::Available(vec!["sleep".into(), "10".into()]));
+        first.threads = Some(Field::Available(vec![
+            thread(901, b"worker", RunState::Waiting),
+            thread(900, b"main", RunState::Waiting),
+        ]));
+        let mut second = process(20, "it's");
+        second.arguments = Some(Field::Available(vec![
+            "sh".into(),
+            "-c".into(),
+            "echo 'hi'".into(),
+        ]));
+        second.threads = Some(Field::Denied);
+
+        pgrep_output(vec![first, second], arguments)
+    }
+
+    /// The standard output, standard error and exit status of `pgrep` with
+    /// `arguments`, for `processes`.
+    fn pgrep_output(
+        processes: Vec<Process>,
+        arguments: &[&str],
+    ) -> Result<(String, String, ExitCode), Box<dyn std::error::Error>> {
+        let mut stderr = Vec::new();
+        let (stdout, status) = pgrep_in(processes, arguments, &mut stderr)?;
+
+        Ok((stdout, String::from_utf8(stderr)?, status))
+    }
+
+    fn pgrep_in(
+        processes: Vec<Process>,
+        arguments: &[&str],
+        stderr: &mut impl Write,
+    ) -> Result<(String, ExitCode), Box<dyn std::error::Error>> {
+        let source = FixtureSource::new(SystemTime::UNIX_EPOCH, Duration::ZERO, processes);
 
         pgrep_from(&source, arguments, stderr)
     }
@@ -329,12 +435,7 @@ mod tests {
     #[case::count_of_none(&["pgrep", "-c", "nothing"], "0\n", "", ExitCode::from(1))]
     #[case::quiet(&["pgrep", "--quiet", "sleep"], "", "", ExitCode::SUCCESS)]
     #[case::no_match(&["pgrep", "nothing"], "", "", ExitCode::from(1))]
-    #[case::unimplemented(
-        &["pgrep", "-l", "sleep"],
-        "",
-        "pgrep: -l is not implemented yet\n",
-        ExitCode::from(3)
-    )]
+    #[case::names(&["pgrep", "-l", "sleep"], "10 sleep\n20 sleep\n", "", ExitCode::SUCCESS)]
     #[case::long_pattern(
         &["pgrep", "sleep-for-a-long-time"],
         "",
@@ -411,8 +512,8 @@ mod tests {
         }
     }
 
-    // procps-ng writes each pid and its delimiter with one `printf` call, and
-    // goes on after a call fails.
+    // procps-ng writes each line with one `printf` call, and goes on after a
+    // call fails.
     #[test]
     fn report_goes_on_writing_after_a_failed_write() -> Result<(), Box<dyn std::error::Error>> {
         let Command::Run(options) = Options::parse(
@@ -427,7 +528,7 @@ mod tests {
             process(20, "sleep"),
             process(30, "sleep"),
         ];
-        let selected: Vec<&Process> = processes.iter().collect();
+        let selected: Vec<_> = processes.iter().map(Process::linux_task).collect();
         let invocation = Invocation {
             mode: Mode::Pgrep,
             program: OsStr::new("pgrep"),
@@ -445,6 +546,36 @@ mod tests {
         );
 
         assert_eq!(stdout.writes, [b"20, ".to_vec(), b"30\n".to_vec()]);
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::names(&["pgrep", "-l", "."], "10 sleep\n20 it's\n")]
+    #[case::command_lines(&["pgrep", "-a", "."], "10 sleep 10\n20 sh -c echo 'hi'\n")]
+    #[case::both(&["pgrep", "-l", "-a", "."], "10 sleep 10\n20 sh -c echo 'hi'\n")]
+    #[case::quoted_names(&["pgrep", "-l", "-Q", "."], "10 sleep\n20 'it'\\''s'\n")]
+    #[case::quoted_command_lines(
+        &["pgrep", "-a", "-Q", "."],
+        "10 sleep 10\n20 sh -c 'echo '\\''hi'\\'''\n"
+    )]
+    #[case::quoted_pids(&["pgrep", "-Q", "."], "10\n20\n")]
+    #[case::delimiter(&["pgrep", "-l", "-d", ", ", "."], "10 sleep, 20 it's\n")]
+    #[case::threads(&["pgrep", "-w", "-l", "."], "900 sleep\n901 worker\n20 it's\n")]
+    #[case::thread_names(&["pgrep", "-w", "work"], "901\n")]
+    #[case::main_thread(&["pgrep", "-w", "^sleep$"], "900\n")]
+    #[case::count(&["pgrep", "-c", "-l", "."], "2\n")]
+    #[case::thread_command_lines(&["pgrep", "-w", "-a", "."], "900 sleep 10\n901 sleep 10\n20 sh -c echo 'hi'\n")]
+    #[case::quoted_thread_names(&["pgrep", "-w", "-l", "-Q", "."], "900 sleep\n901 worker\n20 'it'\\''s'\n")]
+    #[case::inverse_threads(&["pgrep", "-w", "-v", "work"], "900\n20\n")]
+    fn the_selected_tasks_are_listed_as_procps_ng_lists_them(
+        #[case] arguments: &[&str],
+        #[case] expected: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            pgrep_listing(arguments)?,
+            (expected.to_owned(), String::new(), ExitCode::SUCCESS)
+        );
 
         Ok(())
     }

@@ -13,11 +13,11 @@
 // translation under GPL-3.0-or-later.
 
 use std::{
-    ffi::{CString, OsString},
+    ffi::{CString, OsStr, OsString},
     os::unix::ffi::{OsStrExt, OsStringExt},
 };
 
-use darwin_proc::Status;
+use darwin_proc::{Status, ThreadInfo};
 
 use crate::{Field, Process};
 
@@ -252,6 +252,50 @@ impl Process {
         escape(self.linux_comm(), charset)
     }
 
+    /// [`Process::linux_thread_name`] of `thread`, escaped as procps-ng
+    /// escapes its `CMD` item.
+    #[must_use]
+    pub(crate) fn linux_thread_command(&self, thread: &ThreadInfo, charset: Charset) -> OsString {
+        escape(self.linux_thread_name(thread), charset)
+    }
+
+    /// The arguments as procps-ng's `CMDLINE_V` item gives them: each argument
+    /// split at its newlines into one string for each line, and each line cut
+    /// to 131071 bytes and escaped. When the process has no arguments, or the
+    /// source could not read them, the vector contains only `-`, which is what
+    /// procps-ng gives for an empty or unreadable `/proc/<pid>/cmdline`.
+    ///
+    /// ```
+    /// use std::ffi::OsString;
+    ///
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Charset, Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let mut process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    /// process.arguments = Some(Field::Available(vec![
+    ///     OsString::from("sh"),
+    ///     OsString::from("a b"),
+    /// ]));
+    ///
+    /// assert_eq!(
+    ///     process.linux_command_line_vector(Charset::Utf8),
+    ///     [OsString::from("sh"), OsString::from("a b")]
+    /// );
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn linux_command_line_vector(&self, charset: Charset) -> Vec<OsString> {
+        match &self.arguments {
+            Some(Field::Available(arguments)) if !arguments.is_empty() => arguments
+                .iter()
+                .flat_map(|argument| argument.as_bytes().split(|&byte| byte == b'\n'))
+                .map(|line| escape(&line[..line.len().min(COMMAND_LINE_BUFFER - 1)], charset))
+                .collect(),
+            _ => vec![OsString::from("-")],
+        }
+    }
+
     /// The command line as procps-ng's `CMDLINE` item shows it.
     ///
     /// procps-ng joins the arguments with spaces, replaces newlines with
@@ -276,9 +320,15 @@ impl Process {
     /// ```
     #[must_use]
     pub fn linux_command_line(&self, charset: Charset) -> OsString {
+        self.linux_command_line_or(&self.linux_command(charset), charset)
+    }
+
+    /// [`Process::linux_command_line`], with `name` in brackets in place of
+    /// the command name.
+    pub(crate) fn linux_command_line_or(&self, name: &OsStr, charset: Charset) -> OsString {
         let arguments = match &self.arguments {
             Some(Field::Available(arguments)) if !arguments.is_empty() => arguments,
-            _ => return self.bracketed_command(charset),
+            _ => return self.bracketed(name),
         };
 
         let line = unvectored(arguments);
@@ -290,17 +340,16 @@ impl Process {
         escape(&line, charset)
     }
 
-    /// The command name in brackets, as procps-ng's `escape_command` shows
-    /// it with `ESC_BRACKETS` and `ESC_DEFUNCT`.
-    fn bracketed_command(&self, charset: Charset) -> OsString {
-        let command = self.linux_command(charset);
+    /// `name` in brackets, as procps-ng's `escape_command` shows a name with
+    /// `ESC_BRACKETS` and `ESC_DEFUNCT`.
+    fn bracketed(&self, name: &OsStr) -> OsString {
         let defunct: &[u8] = if self.info.status == Status::Zombie {
             b" <defunct>"
         } else {
             b""
         };
 
-        OsString::from_vec([b"[", command.as_bytes(), b"]", defunct].concat())
+        OsString::from_vec([b"[", name.as_bytes(), b"]", defunct].concat())
     }
 
     /// The environment as procps-ng's `ENVIRON_V` item gives it: one escaped
@@ -381,12 +430,12 @@ fn unvectored(arguments: &[OsString]) -> Vec<u8> {
 mod tests {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
-    use darwin_proc::{Pid, Status};
+    use darwin_proc::Status;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
     use super::{Charset, escape};
-    use crate::{Field, Process};
+    use crate::{Field, Process, testing};
 
     #[rstest]
     #[case::ascii(b"sshd", "sshd")]
@@ -441,18 +490,13 @@ mod tests {
         );
     }
 
-    fn process(
-        comm: &str,
-        status: Status,
-        arguments: Option<Field<Vec<OsString>>>,
-    ) -> Result<Process, darwin_proc::Error> {
-        let mut info = Pid::current().info()?;
-        info.comm = comm.into();
-        info.status = status;
-        let mut process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    /// A process called `comm` with `status` and the arguments `arguments`.
+    fn process(comm: &str, status: Status, arguments: Option<Field<Vec<OsString>>>) -> Process {
+        let mut process = testing::process(10, comm);
+        process.info.status = status;
         process.arguments = arguments;
 
-        Ok(process)
+        process
     }
 
     #[rstest]
@@ -470,15 +514,13 @@ mod tests {
         #[case] arguments: Option<Field<Vec<&str>>>,
         #[case] status: Status,
         #[case] expected: &str,
-    ) -> Result<(), darwin_proc::Error> {
+    ) {
         let arguments = arguments.map(|field| {
             field.map(|arguments| arguments.into_iter().map(OsString::from).collect())
         });
-        let process = process("worker", status, arguments)?;
+        let process = process("worker", status, arguments);
 
         assert_eq!(process.linux_command_line(Charset::Utf8), expected);
-
-        Ok(())
     }
 
     // procps-ng drops the last byte of a cut command line if it is a space,
@@ -489,60 +531,85 @@ mod tests {
     fn a_long_command_line_is_cut_where_procps_ng_cuts_it(
         #[case] argument: String,
         #[case] expected: String,
-    ) -> Result<(), darwin_proc::Error> {
+    ) {
         let process = process(
             "worker",
             Status::Running,
             Some(Field::Available(vec![OsString::from(argument)])),
-        )?;
+        );
 
         assert_eq!(
             process.linux_command_line(Charset::Utf8),
             OsString::from(expected)
         );
-
-        Ok(())
     }
 
     #[rstest]
     #[case::partial_character("abcdefghijklmn\u{e9}", "abcdefghijklmn?")]
     #[case::partial_three_bytes("abcdefghijklm\u{20ac}x", "abcdefghijklm??")]
     #[case::whole_character("abcdefghijklm\u{e9}", "abcdefghijklm\u{e9}")]
-    fn the_command_name_keeps_linux_s_15_bytes(
-        #[case] comm: &str,
-        #[case] expected: &str,
-    ) -> Result<(), darwin_proc::Error> {
-        let process = process(comm, Status::Running, None)?;
+    fn the_command_name_keeps_linux_s_15_bytes(#[case] comm: &str, #[case] expected: &str) {
+        let process = process(comm, Status::Running, None);
 
         assert_eq!(process.linux_command(Charset::Utf8), expected);
-
-        Ok(())
     }
 
     #[test]
-    fn a_long_variable_is_cut_where_procps_ng_cuts_it() -> Result<(), darwin_proc::Error> {
+    fn a_long_variable_is_cut_where_procps_ng_cuts_it() {
         let variable = format!("A={}", "x".repeat(200_000));
-        let mut process = process("worker", Status::Running, None)?;
+        let mut process = process("worker", Status::Running, None);
         process.environment = Some(Field::Available(vec![OsString::from(&variable)]));
 
         assert_eq!(
             process.linux_environment(Charset::Utf8),
             Some(vec![OsString::from(&variable[..131_071])])
         );
-
-        Ok(())
     }
 
     #[test]
-    fn a_variable_is_escaped_for_the_charset() -> Result<(), darwin_proc::Error> {
-        let mut process = process("worker", Status::Running, None)?;
+    fn a_variable_is_escaped_for_the_charset() {
+        let mut process = process("worker", Status::Running, None);
         process.environment = Some(Field::Available(vec![OsString::from("V=caf\u{e9}")]));
 
         assert_eq!(
             process.linux_environment(Charset::from_codeset("US-ASCII")),
             Some(vec![OsString::from("V=caf??")])
         );
+    }
 
-        Ok(())
+    #[test]
+    fn a_long_argument_is_cut_where_procps_ng_cuts_it() {
+        let long = "x".repeat(200_000);
+        let process = process(
+            "worker",
+            Status::Running,
+            Some(Field::Available(vec![
+                OsString::from("a"),
+                OsString::from(&long),
+            ])),
+        );
+
+        assert_eq!(
+            process.linux_command_line_vector(Charset::Utf8),
+            [OsString::from("a"), OsString::from(&long[..131_071])]
+        );
+    }
+
+    #[rstest]
+    #[case::arguments(Some(Field::Available(vec!["sh", "-c", "a\nb", ""])), vec!["sh", "-c", "a", "b", ""])]
+    #[case::escaped(Some(Field::Available(vec!["a\tb"])), vec!["a?b"])]
+    #[case::none(Some(Field::Available(vec![])), vec!["-"])]
+    #[case::denied(Some(Field::Denied), vec!["-"])]
+    #[case::not_requested(None, vec!["-"])]
+    fn the_argument_vector_is_procps_ng_s(
+        #[case] arguments: Option<Field<Vec<&str>>>,
+        #[case] expected: Vec<&str>,
+    ) {
+        let arguments = arguments.map(|field| {
+            field.map(|arguments| arguments.into_iter().map(OsString::from).collect())
+        });
+        let process = process("worker", Status::Running, arguments);
+
+        assert_eq!(process.linux_command_line_vector(Charset::Utf8), expected);
     }
 }

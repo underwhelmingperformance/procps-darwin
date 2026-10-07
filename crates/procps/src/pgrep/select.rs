@@ -18,9 +18,14 @@ use std::{
 };
 
 use darwin_proc::{Pid, Regex};
-use procps_core::{COMMAND_NAME_LENGTH, Charset, FieldGroup, Process, Snapshot, SnapshotRequest};
+use procps_core::{
+    COMMAND_NAME_LENGTH, Charset, FieldGroup, LinuxTask, Process, Snapshot, SnapshotRequest,
+};
 
-use crate::pgrep::{Mode, Options, PgrepError, options::Pick};
+use crate::pgrep::{
+    Mode, Options, PgrepError,
+    options::{Listing, Pick, Report, Tasks},
+};
 
 /// What the selection and the report need to know about the running tool.
 #[derive(Clone, Copy, Debug)]
@@ -32,17 +37,17 @@ pub(crate) struct Invocation<'a> {
     /// The tool's own process, which is never selected.
     pub(crate) myself: Pid,
     /// The locale's character encoding, which decides how names and command
-    /// lines are escaped before they are matched.
+    /// lines are escaped before they are matched and printed.
     pub(crate) charset: Charset,
 }
 
 /// The snapshot request for `options`. It covers every process, and adds the
-/// arguments for `-f` and the environment for `--env`. It adds the threads for
-/// `-r`, because the threads decide the state letter.
+/// arguments for `-f` and `-a`, the environment for `--env`, and the threads
+/// for `-w` and `-r`. `-r` needs the threads because they decide the state.
 pub(crate) fn request(options: &Options) -> SnapshotRequest {
     let mut request = SnapshotRequest::default();
 
-    if options.matching.full {
+    if options.matching.full || options.output.report == Report::List(Listing::CommandLines) {
         request = request.with(FieldGroup::Arguments);
     }
 
@@ -50,7 +55,7 @@ pub(crate) fn request(options: &Options) -> SnapshotRequest {
         request = request.with(FieldGroup::Environment);
     }
 
-    if options.filters.states.is_some() {
+    if options.filters.states.is_some() || options.tasks == Tasks::Threads {
         request = request.with(FieldGroup::Threads);
     }
 
@@ -153,7 +158,22 @@ impl Clock {
     }
 }
 
-/// The process that `-n` or `-o` keeps so far, as procps-ng's
+/// The tasks of `snapshot`: its processes, or with `-w` their threads.
+fn tasks(snapshot: &Snapshot, tasks: Tasks) -> Vec<LinuxTask<'_>> {
+    snapshot
+        .processes
+        .iter()
+        .flat_map(|process| {
+            if tasks == Tasks::Threads {
+                process.linux_tasks()
+            } else {
+                vec![process.linux_task()]
+            }
+        })
+        .collect()
+}
+
+/// The task that `-n` or `-o` keeps so far, as procps-ng's
 /// `saved_start_time` and `saved_pid` record it.
 #[derive(Clone, Copy, Debug)]
 struct Saved {
@@ -162,17 +182,21 @@ struct Saved {
     /// before tick 0 or after the largest tick, so the first comparison never
     /// rejects a process.
     start: Option<u64>,
-    pid: Pid,
+    id: u64,
 }
 
 impl Selection<'_> {
-    /// The processes in `snapshot` that match the selection, as procps-ng's
-    /// `select_procs` chooses them, in ascending order of process ID.
+    /// The tasks in `snapshot` that pass the selection, as procps-ng's
+    /// `select_procs` chooses them, in the snapshot's order of processes and
+    /// then in ascending order of thread ID. The tool's own process is never
+    /// selected, and with `-A` neither are its ancestors. With `-w`, every
+    /// thread of the tool's own process is left out, but only the main
+    /// thread of each ancestor, as on Linux.
     pub(crate) fn select<'s>(
         &self,
         snapshot: &'s Snapshot,
         invocation: &Invocation<'_>,
-    ) -> Vec<&'s Process> {
+    ) -> Vec<LinuxTask<'s>> {
         select(self.options, self.regex.as_ref(), snapshot, invocation)
     }
 }
@@ -182,7 +206,7 @@ fn select<'a>(
     regex: Option<&Regex>,
     snapshot: &'a Snapshot,
     invocation: &Invocation<'_>,
-) -> Vec<&'a Process> {
+) -> Vec<LinuxTask<'a>> {
     let clock = Clock::new(snapshot);
     let ancestors = if options.filters.ignore_ancestors {
         ancestors(snapshot, invocation.myself)
@@ -191,36 +215,45 @@ fn select<'a>(
     };
     let mut saved = Saved {
         start: None,
-        pid: Pid::from(match options.pick {
-            Pick::Oldest => libc::pid_t::MAX,
+        id: match options.pick {
+            Pick::Oldest => u64::MAX,
             Pick::Newest | Pick::All => 0,
-        }),
+        },
     };
     let mut selected = Vec::new();
 
-    for process in &snapshot.processes {
-        let pid = process.info.pid;
+    for task in tasks(snapshot, options.tasks) {
+        let pid = task.process().info.pid;
 
         // Linux does not expose a process with pid 0 in `/proc`, so procps-ng
         // never lists one. On Darwin, `kernel_task` has pid 0, and `kill 0`
         // signals the caller's process group, so a script that passed a 0 from
         // pgrep to `kill` would signal its own group.
-        if pid.as_raw() == 0 || pid == invocation.myself || ancestors.contains(&pid) {
+        //
+        // procps-ng compares each task's ID with the pids of the tool and its
+        // ancestors. On Linux, only a main thread's ID equals a pid, so only
+        // the ancestors' main threads are left out. procps-ng's `pgrep` has one
+        // thread, so leaving out every thread of the tool's own process matches
+        // Linux.
+        if pid.as_raw() == 0
+            || pid == invocation.myself
+            || (task.is_leader() && ancestors.contains(&pid))
+        {
             continue;
         }
 
-        let start = clock.tick(process.info.start_time);
+        let start = clock.tick(task.process().info.start_time);
         let mut matches = match (options.pick, saved.start) {
             (Pick::Newest, Some(saved)) if start < saved => false,
             (Pick::Oldest, Some(saved)) if start > saved => false,
-            _ => passes_filters(options, snapshot, clock, process, invocation.charset),
+            _ => passes_filters(options, snapshot, clock, &task, invocation.charset),
         };
 
         if matches && let Some(regex) = regex {
             let text = if options.matching.full {
-                process.linux_command_line(invocation.charset)
+                task.command_line(invocation.charset)
             } else {
-                process.linux_command(invocation.charset)
+                task.command(invocation.charset)
             };
 
             matches = regex.is_match(&text);
@@ -231,10 +264,11 @@ fn select<'a>(
         }
 
         if options.pick != Pick::All {
+            let id = task.id();
             let tied = saved.start == Some(start);
             let keep_saved = match options.pick {
-                Pick::Newest => tied && saved.pid > pid,
-                Pick::Oldest => tied && saved.pid < pid,
+                Pick::Newest => tied && saved.id > id,
+                Pick::Oldest => tied && saved.id < id,
                 Pick::All => false,
             };
 
@@ -244,26 +278,27 @@ fn select<'a>(
 
             saved = Saved {
                 start: Some(start),
-                pid,
+                id,
             };
             selected.clear();
         }
 
-        selected.push(process);
+        selected.push(task);
     }
 
     selected
 }
 
-/// Whether `process` passes every filter of `options` other than the
-/// pattern. procps-ng checks the filters in this order.
+/// Whether `task` passes every filter of `options` other than the pattern.
+/// procps-ng checks the filters in this order.
 fn passes_filters(
     options: &Options,
     snapshot: &Snapshot,
     clock: Clock,
-    process: &Process,
+    task: &LinuxTask<'_>,
     charset: Charset,
 ) -> bool {
+    let process = task.process();
     let info = &process.info;
     let credentials = &info.credentials;
     let listed = |list: &Option<Vec<i64>>, value: i64| {
@@ -304,9 +339,7 @@ fn passes_filters(
                 .any(|terminal| terminal.as_bytes() == name.as_bytes())
         })
         && options.filters.states.as_ref().is_none_or(|states| {
-            process
-                .linux_state()
-                .known_letter()
+            task.state_letter()
                 .and_then(|letter| u8::try_from(letter).ok())
                 .is_some_and(|letter| states.as_bytes().contains(&letter))
         })
@@ -413,10 +446,12 @@ mod tests {
     use assert_matches::assert_matches;
     use darwin_proc::{
         AccountingFlags, Credentials, Gid, Pid, ProcessFlags, ProcessInfo, RegexErrorKind,
-        SignalSet, Status, Terminal, Uid,
+        RunState, SignalSet, Status, Terminal, Uid,
     };
     use pretty_assertions::assert_eq;
-    use procps_core::{Charset, Field, FieldGroup, Process, Snapshot, SnapshotRequest};
+    use procps_core::{
+        Charset, Field, FieldGroup, LinuxTask, Process, Snapshot, SnapshotRequest, testing::thread,
+    };
     use rstest::rstest;
 
     use super::{Invocation, Selection, environment_matches, is_long_match, request};
@@ -610,7 +645,7 @@ mod tests {
 
         Ok(selected
             .iter()
-            .map(|process| process.info.pid.as_raw())
+            .map(|task| task.process().info.pid.as_raw())
             .collect())
     }
 
@@ -708,6 +743,69 @@ mod tests {
         Ok(())
     }
 
+    /// The IDs of the tasks that `arguments` select, when the source has
+    /// read the threads of the tool, its ancestor 60 and the processes 200,
+    /// 201 and 300. 200 and 201 started at the same time. The source could
+    /// not read the arguments of 300, whose second thread has its own name.
+    fn selected_tasks(arguments: &[&str]) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
+        let mut snapshot = snapshot()?;
+
+        for process in &mut snapshot.processes {
+            let threads = match process.info.pid.as_raw() {
+                60 => vec![
+                    thread(600, b"", RunState::Waiting),
+                    thread(601, b"", RunState::Waiting),
+                ],
+                MYSELF => vec![
+                    thread(1001, b"", RunState::Running),
+                    thread(1000, b"", RunState::Running),
+                ],
+                200 => vec![
+                    thread(2001, b"io", RunState::Running),
+                    thread(2000, b"main", RunState::Waiting),
+                    thread(2002, b"", RunState::Uninterruptible),
+                ],
+                201 => vec![thread(2010, b"", RunState::Running)],
+                300 => {
+                    process.arguments = Some(Field::Denied);
+                    vec![
+                        thread(3000, b"", RunState::Waiting),
+                        thread(3001, b"worker", RunState::Waiting),
+                    ]
+                }
+                _ => continue,
+            };
+            process.threads = Some(Field::Available(threads));
+        }
+
+        let options = options(arguments)?;
+        let selected = Selection::new(&options)?.select(&snapshot, &invocation(Charset::Utf8));
+
+        Ok(selected.iter().map(LinuxTask::id).collect())
+    }
+
+    #[rstest]
+    #[case::names(&["pgrep", "-w", "sleep"], &[2000, 2002, 2010])]
+    #[case::thread_name(&["pgrep", "-w", "^io$"], &[2001])]
+    #[case::running(&["pgrep", "-w", "-r", "R"], &[2001])]
+    #[case::uninterruptible(&["pgrep", "-w", "-r", "D"], &[2002])]
+    #[case::stopped(&["pgrep", "-w", "-r", "T"], &[2010])]
+    #[case::not_myself(&["pgrep", "-w", "-U", "501"], &[600, 601, 2000, 2001, 2002, 2010, 202])]
+    #[case::not_ancestors_main_threads(&["pgrep", "-w", "-A", "-U", "501"], &[601, 2000, 2001, 2002, 2010, 202])]
+    #[case::pid(&["pgrep", "-w", "-p", "200"], &[2000, 2001, 2002])]
+    #[case::newest(&["pgrep", "-w", "-n", "sleep"], &[2010])]
+    #[case::oldest(&["pgrep", "-w", "-o", "sleep"], &[2000])]
+    #[case::unreadable_command_line_of_a_named_thread(&["pgrep", "-w", "-f", "^\\[worker\\]$"], &[3001])]
+    #[case::unreadable_command_line_of_the_main_thread(&["pgrep", "-w", "-f", "^\\[Sleepy\\]$"], &[3000])]
+    fn threads_are_selected_as_tasks(
+        #[case] arguments: &[&str],
+        #[case] expected: &[u64],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(selected_tasks(arguments)?, expected);
+
+        Ok(())
+    }
+
     #[test]
     fn ignore_ancestors_leaves_out_the_tool_s_ancestors() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -777,6 +875,8 @@ mod tests {
     #[case::full(&["pgrep", "-f", "x"], SnapshotRequest::default().with(FieldGroup::Arguments))]
     #[case::environment(&["pgrep", "--env", "A"], SnapshotRequest::default().with(FieldGroup::Environment))]
     #[case::states(&["pgrep", "-r", "S"], SnapshotRequest::default().with(FieldGroup::Threads))]
+    #[case::command_lines(&["pgrep", "-a", "x"], SnapshotRequest::default().with(FieldGroup::Arguments))]
+    #[case::threads(&["pgrep", "-w", "x"], SnapshotRequest::default().with(FieldGroup::Threads))]
     fn the_request_asks_only_for_what_the_options_need(
         #[case] arguments: &[&str],
         #[case] expected: SnapshotRequest,

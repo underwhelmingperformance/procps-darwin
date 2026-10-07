@@ -17,6 +17,9 @@ mod request;
 mod snapshot;
 mod source;
 mod summary;
+mod task;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 pub use budget::Budget;
 pub use choice::{ChoiceError, HelperOrLocal, SOURCE_VARIABLE, Source, SourceChoice};
@@ -28,3 +31,4 @@ pub use request::{FieldGroup, SnapshotRequest};
 pub use snapshot::{Process, RegionTotals, Snapshot, System, Usage};
 pub use source::{FixtureSource, LocalSource, ProcessSource, SourceError};
 pub use summary::{LinuxCpu, LinuxMemory, LinuxSwap};
+pub use task::LinuxTask;

@@ -974,13 +974,13 @@ Match by pattern, `-f`, `-i`, `-x`, `-v`, `-u`, `-U`, `-G`, `-g`, `-P`, `-s`,
 `-n`, `-o` and `-A`, excluding the tool's own process.
 
 `procps::pgrep` ports procps-ng's `select_procs`. It takes a single snapshot of
-all processes. The snapshot includes the arguments only for `-f` and the
-environment only for `--env`. It includes the threads only for `-r`, because the
-threads decide the state letter. The selection applies the filters in
-procps-ng's order, matches the pattern, and keeps one process for `-n` or `-o`,
-with procps-ng's tie-break on the pid. Like procps-ng, it compares start times,
-and computes the elapsed time for `-O`, in clock ticks since boot, at 100 ticks
-a second.
+all processes. The snapshot includes the arguments only for `-f` and `-a`, the
+environment only for `--env`, and the threads only for `-w` and `-r`. `-r` needs
+the threads because they decide the state. The selection applies the filters in
+procps-ng's order, matches the pattern, and keeps one task for `-n` or `-o`,
+with procps-ng's tie-break on the task's ID. Like procps-ng, it compares start
+times, and computes the elapsed time for `-O`, in clock ticks since boot, at 100
+ticks a second.
 
 The pattern is matched against the command name, or with `-f` the command line,
 as procps-ng shows them. `procps-core` ports the escaping of `library/escape.c`,
@@ -1005,23 +1005,36 @@ Darwin.
 `pgrep` prints the pids with the delimiter, or their number with `-c`, and
 nothing with `--quiet`. If no process matches, it prints procps-ng's warning
 when `-f` is not given and the pattern is longer than 15 bytes without a `|` or
-`[`. The other output options are task 4.3, and `pkill`'s signals are task 4.4.
-Until then, `pkill` always exits with status 3, and so does `pgrep` with `-l`,
-`-a`, `-Q` or `-w`.
+`[`. `pkill`'s signals are task 4.4. Until task 4.4 is done, `pkill` always
+exits with status 3.
 
-#### 4.3 Output
+#### 4.3 Output (done)
 
-Implement the output options `-l`, `-a` and `-Q`, and `pkill`'s `-e`. `-w` lists
-64-bit Darwin thread IDs in place of Linux TIDs; document this in
-`docs/mappings.md`.
+Implement the output options `-l`, `-a`, `-Q` and `-w`. `-w` lists 64-bit Darwin
+thread IDs in place of Linux TIDs; document this in `docs/mappings.md`.
+
+`pgrep` prints each pid, or with `-w` each thread ID, followed for `-l` by the
+name and for `-a` by the command line, as procps-ng's `output_strlist` does.
+With `-l` or `-a`, `-Q` quotes the name, or each argument of the command line,
+as procps-ng's `shell_quote_vector` does. The text after the ID is cut to 131071
+bytes: procps-ng's buffer has 128 KiB, and the last byte is the NUL.
+`procps-core` builds the argument vector as procps-ng's `CMDLINE_V` item does.
+The vector contains only `-` when the process has no arguments or the source
+could not read them.
+
+Linux calls each thread a task, and with `-w`, `pgrep` lists the threads as
+tasks. `LinuxTask`, which gives each task's ID, name and state, is in
+`procps-core`, so `ps -L` can use it too. `docs/mappings.md` describes how
+Darwin's threads map to Linux's.
 
 #### 4.4 Signals
 
 Send the signal with `kill(2)`. Task 4.1 parses the signal names and numbers for
 Darwin's signal set, which has `SIGINFO` and `SIGEMT` and no real-time signals.
-Report failures in procps-ng's format. Just before signalling, read each
-process's start time again and skip a process whose start time has changed,
-because its pid now belongs to another process.
+Report failures in procps-ng's format, and with `-e` report each signal that
+`pkill` sends. Just before signalling, read each process's start time again and
+skip a process whose start time has changed, because its pid now belongs to
+another process.
 
 #### 4.5 Unsupported options (done)
 

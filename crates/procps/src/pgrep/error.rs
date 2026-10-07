@@ -142,9 +142,8 @@ pub enum PgrepError {
     Source(#[from] procps_core::SourceError),
     /// A write to standard output or standard error failed.
     Write(#[from] WriteFailure),
-    /// The command line asks for a feature that is not implemented yet: an
-    /// output option, such as `-l`, or `pkill`'s signalling.
-    Unimplemented(&'static str),
+    /// `pkill` cannot send signals yet.
+    Unimplemented,
 }
 
 /// How procps-ng lays out an error on standard error.
@@ -227,7 +226,7 @@ impl PgrepError {
             | Self::UnlockedPidfile(_)
             | Self::InvalidPidfile
             | Self::Write(_) => 1,
-            Self::Choice(_) | Self::Source(_) | Self::Unimplemented(_) => 3,
+            Self::Choice(_) | Self::Source(_) | Self::Unimplemented => 3,
             _ => 2,
         }
     }
@@ -258,7 +257,7 @@ impl PgrepError {
             | Self::Regex(_)
             | Self::Choice(_)
             | Self::Source(_)
-            | Self::Unimplemented(_) => Shape::Alone,
+            | Self::Unimplemented => Shape::Alone,
         }
     }
 
@@ -311,7 +310,7 @@ impl PgrepError {
             Self::Regex(error) => text(&format!("regex error: {}", error.message)),
             Self::Choice(error) => text(&describe(error)),
             Self::Source(error) => text(&describe(error)),
-            Self::Unimplemented(feature) => text(&format!("{feature} is not implemented yet")),
+            Self::Unimplemented => text("pkill's signals are not implemented yet"),
         }
     }
 
@@ -437,6 +436,11 @@ mod tests {
         1
     )]
     #[case::stderr(PgrepError::Write(WriteFailure::Stderr), &b""[..], 1)]
+    #[case::unimplemented(
+        PgrepError::Unimplemented,
+        &b"pgrep: pkill's signals are not implemented yet\n"[..],
+        3
+    )]
     fn an_error_is_reported_as_procps_ng_reports_it(
         #[case] error: PgrepError,
         #[case] expected: &[u8],
