@@ -2,7 +2,15 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{io, os::unix::net::UnixStream, path::PathBuf, time::Duration};
+use std::{
+    fs, io,
+    os::unix::{
+        fs::{FileTypeExt, MetadataExt},
+        net::UnixStream,
+    },
+    path::PathBuf,
+    time::Duration,
+};
 
 use darwin_proc::{PeerCredentials, Uid};
 use rustix::{
@@ -32,9 +40,12 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// Takes snapshots through the helper daemon, which reads other users'
 /// processes as root.
 ///
-/// Before it sends a request, the source checks that the process listening on
-/// the socket runs as root, so that the tool never reads data from a socket
-/// that another user has created at the path.
+/// Before it connects, the source checks that the path is a socket that root
+/// owns and that has no other links, so that a symbolic or hard link to
+/// another socket fails. After it connects, it also checks that `getpeereid`
+/// reports root, which means that root called `listen` on the socket. launchd
+/// calls `listen` as root for every job's socket, including a user's own launch
+/// agent, so the second check alone cannot tell the helper from another job.
 ///
 /// ```
 /// use procps_core::{ProcessSource, SnapshotRequest, helper::HelperSource};
@@ -59,14 +70,43 @@ pub enum HelperError {
     /// The tool could not identify the process that listens on the socket.
     #[error("cannot identify the helper")]
     Peer(#[from] darwin_proc::Error),
-    /// The process that listens on the socket runs as another user.
+    /// The path of the helper's socket is not a socket, for example because
+    /// it is a symbolic link.
+    #[error("{} is not a socket", path.display())]
+    NotSocket {
+        /// The path of the helper's socket.
+        path: PathBuf,
+    },
+    /// The helper's socket belongs to another user.
     #[error(
-        "the process listening on the helper's socket runs as user {}, not user {}",
+        "the helper's socket belongs to user {}, not user {}",
+        found.as_raw(),
+        expected.as_raw()
+    )]
+    Owner {
+        /// The user that owns the socket.
+        found: Uid,
+        /// The user ID that the tool requires.
+        expected: Uid,
+    },
+    /// The helper's socket has more than one link, so the path may be a hard
+    /// link to another daemon's socket.
+    #[error("{} has {links} links, not 1", path.display())]
+    Links {
+        /// The path of the helper's socket.
+        path: PathBuf,
+        /// The number of links to the socket.
+        links: u64,
+    },
+    /// Another user called `listen` on the socket.
+    #[error(
+        "user {} called listen on the helper's socket, not user {}",
         found.as_raw(),
         expected.as_raw()
     )]
     Untrusted {
-        /// The effective user ID of the process that listens on the socket.
+        /// The effective user ID of the process that called `listen` on the
+        /// socket.
         found: Uid,
         /// The user ID that the tool requires.
         expected: Uid,
@@ -81,8 +121,10 @@ pub enum HelperError {
 
 impl HelperError {
     /// Whether the helper will fail in the same way for every later request:
-    /// its socket is missing or untrusted, the tool cannot identify the process
-    /// listening on it, or the helper uses another version of the protocol.
+    /// its path is missing or is not a socket, the socket belongs to another
+    /// user or has other links, another user called `listen` on it, the tool
+    /// cannot identify the process listening on it, or the helper uses another
+    /// version of the protocol.
     ///
     /// A refused connection is not persistent, because Darwin refuses
     /// connections to a socket whose listen backlog is full.
@@ -98,6 +140,9 @@ impl HelperError {
             Self::Connect(error) => error.kind() == io::ErrorKind::NotFound,
             Self::Untrusted { .. }
             | Self::Peer(_)
+            | Self::NotSocket { .. }
+            | Self::Owner { .. }
+            | Self::Links { .. }
             | Self::Protocol(ProtocolError::Version { .. }) => true,
             Self::Protocol(_) | Self::Refused(_) => false,
         }
@@ -172,6 +217,38 @@ impl HelperSource {
         Self { patience, ..self }
     }
 
+    /// Checks that the path is a socket, not a symbolic link, that `owner` owns
+    /// it, and that it has no other links.
+    fn check_path(&self) -> Result<(), HelperError> {
+        // Not `fs::metadata`, which would follow a symbolic link to a socket
+        // that another user created.
+        let metadata = fs::symlink_metadata(&self.path)?;
+
+        if !metadata.file_type().is_socket() {
+            return Err(HelperError::NotSocket {
+                path: self.path.clone(),
+            });
+        }
+
+        let found = Uid::from(metadata.uid());
+
+        if found != self.owner {
+            return Err(HelperError::Owner {
+                found,
+                expected: self.owner,
+            });
+        }
+
+        if metadata.nlink() != 1 {
+            return Err(HelperError::Links {
+                path: self.path.clone(),
+                links: metadata.nlink(),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Connects to the helper's socket.
     fn connect(&self) -> io::Result<UnixStream> {
         let stream = socket(AddressFamily::UNIX, SocketType::STREAM, None)?;
@@ -188,6 +265,7 @@ impl HelperSource {
 
     /// Sends `request` to the helper and receives the snapshot.
     fn request(&self, request: &SnapshotRequest) -> Result<Snapshot, HelperError> {
+        self.check_path()?;
         let stream = self.connect()?;
 
         // Use `PeerCredentials`, not `Peer::of`. The helper may already have
