@@ -55,6 +55,11 @@
         type = t.package;
         description = "Commit message linter";
       };
+
+      devShellDigest = lib.mkOption {
+        type = t.package;
+        description = "Program that prints a digest of the files that define the development shell";
+      };
     };
   });
 
@@ -97,6 +102,25 @@
       rustfmtBin = lib.getExe' rustfmtNightly "rustfmt";
 
       wrapscallion = pkgs.callPackage ./wrapscallion/package.nix {};
+
+      devShellDigest = pkgs.writeShellApplication {
+        name = "dev-shell-digest";
+        runtimeInputs = [pkgs.coreutils pkgs.findutils pkgs.git];
+        text = ''
+          cd "$(git rev-parse --show-toplevel)"
+          # Nix sees only the files that git tracks, so an untracked file such
+          # as nix/.DS_Store must not change the digest.
+          git ls-files -z flake.nix flake.lock nix |
+            LC_ALL=C sort -z |
+            while IFS= read -r -d "" file; do
+              printf '%s\n' "$file"
+              cat "$file"
+              printf '\n'
+            done |
+            sha256sum |
+            cut -d ' ' -f 1
+        '';
+      };
     };
   };
 }
