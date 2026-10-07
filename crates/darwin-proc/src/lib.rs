@@ -37,7 +37,7 @@ mod user;
 pub use arguments::{Arguments, MalformedArguments};
 pub use error::{Call, Error};
 pub use info::{AccountingFlags, Credentials, ProcessFlags, ProcessInfo, Status, Terminal};
-pub use locale::{CaseFolding, Locale, set_locale};
+pub use locale::{CaseFolding, Locale, decode_each_byte, set_locale};
 pub use pid::Pid;
 pub use regex::{Regex, RegexError, RegexErrorKind};
 pub use region::{Protection, Region, RegionWalk, ShareMode};

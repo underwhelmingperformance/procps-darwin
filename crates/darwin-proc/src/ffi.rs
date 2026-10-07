@@ -192,6 +192,21 @@ pub struct MachTimebaseInfo {
 /// declare for Darwin.
 pub const LC_GLOBAL_LOCALE: libc::locale_t = std::ptr::without_provenance_mut(usize::MAX);
 
+// The functions of `<iconv.h>`, in `libiconv`. The `libc` crate declares these
+// functions too, but deprecates those declarations.
+#[link(name = "iconv")]
+unsafe extern "C" {
+    pub fn iconv_open(to: *const libc::c_char, from: *const libc::c_char) -> *mut libc::c_void;
+    pub fn iconv(
+        descriptor: *mut libc::c_void,
+        input: *mut *mut libc::c_char,
+        input_left: *mut libc::size_t,
+        output: *mut *mut libc::c_char,
+        output_left: *mut libc::size_t,
+    ) -> libc::size_t;
+    pub fn iconv_close(descriptor: *mut libc::c_void) -> libc::c_int;
+}
+
 unsafe extern "C" {
     /// `mach_continuous_time` from `<mach/mach_time.h>`, which the `libc` crate
     /// does not declare.

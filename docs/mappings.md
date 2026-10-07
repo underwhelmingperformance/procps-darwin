@@ -197,7 +197,8 @@ Linux keeps 15 bytes of a process's command name, and `pgrep` warns when a
 pattern without `-f` is longer than that, because the pattern cannot match.
 Darwin keeps 16 bytes in `p_comm`. The tools keep the first 15 bytes of
 `p_comm`, so `ps`'s `comm` column, `pgrep`'s matching and its warning behave as
-on Linux. As on Linux, the 15 bytes can end inside a multi-byte character.
+on Linux. As on Linux, the 15 bytes can end inside a multi-byte character, and
+the escaping then replaces each byte of the partial character with `?`.
 
 ## `kernel_task`
 
@@ -315,7 +316,9 @@ without a codeset. glibc lacks `fa_AF`, `se_FI` and `sr_YU`, so procps-ng and
 the tools both fail to set these locales and stay in the C locale. For `ar_AE`,
 `ar_EG`, `ar_JO`, `ar_MA`, `ar_QA`, `ar_SA`, `en_PH`, `es_CR`, `ga_IE` and
 `he_IL`, Darwin has no locale with glibc's codeset, and the tools use Darwin's
-locale of that name.
+locale of that name. Darwin reports the codeset of that locale as an empty
+string, and with an empty codeset `iconv` decodes no single byte above 0x7f, so
+the tools escape every byte outside ASCII.
 
 Darwin also installs a locale called `UTF-8`, which glibc lacks, and the
 Terminal app on macOS sets `LC_CTYPE=UTF-8`. procps-ng would run in the C locale
@@ -395,3 +398,20 @@ characters. Two differences follow in locales other than C:
   Turkish locales pair `i` with `İ` and `I` with `ı`, whereas Darwin's pair `i`
   with `I`. The tools fold these four letters as glibc does, so in
   `tr_TR.UTF-8`, `pgrep -i INIT` does not select `init`.
+
+## Escaped text
+
+procps-ng replaces each byte of a character that is unsafe on a terminal, and
+each byte of an invalid sequence, with `?` in command names, command lines and
+environment strings, before it matches or prints them. In a UTF-8 locale, it
+keeps valid characters other than control and private-use characters. In any
+other locale, it keeps the bytes that `isprint` accepts. glibc's locales
+classify every character other than a control character as printable, whereas
+Darwin's `isprint` also accepts bytes that encode no character, such as 0xae in
+ISO 8859-7. The tools therefore decode each of the 256 byte values with `iconv`
+in the locale's encoding, and keep a byte that decodes to a character other than
+a control character. If `iconv` does not know the encoding, the tools keep the
+printable characters of ASCII. Apple's `iconv` and glibc's character maps
+disagree about some bytes: in ARMSCII-8, about 0xa1, 0xa4, 0xa5, 0xa9, 0xab,
+0xac and 0xff, and in GBK, about 0x80. For those bytes, the tools follow
+`iconv`.

@@ -7,6 +7,7 @@
 
 mod budget;
 mod choice;
+mod escape;
 mod field;
 pub mod helper;
 mod linux;
@@ -19,6 +20,7 @@ mod summary;
 
 pub use budget::Budget;
 pub use choice::{ChoiceError, HelperOrLocal, SOURCE_VARIABLE, Source, SourceChoice};
+pub use escape::{Charset, PrintableBytes};
 pub use field::Field;
 pub use linux::{LinuxPolicy, LinuxPriority, LinuxSizes, LinuxState};
 pub use report::ErrorChain;
