@@ -21,6 +21,25 @@ use crate::{
 pub trait ProcessSource {
     /// Reads what `request` asks for.
     ///
+    /// ```
+    /// use std::time::{Duration, SystemTime};
+    ///
+    /// use procps_core::{FixtureSource, ProcessSource, Snapshot, SnapshotRequest};
+    ///
+    /// let source = FixtureSource::new(SystemTime::UNIX_EPOCH, Duration::from_secs(5), Vec::new());
+    ///
+    /// assert_eq!(
+    ///     source.snapshot(&SnapshotRequest::default())?,
+    ///     Snapshot {
+    ///         taken: SystemTime::UNIX_EPOCH,
+    ///         uptime: Duration::from_secs(5),
+    ///         processes: Vec::new(),
+    ///         system: None,
+    ///     }
+    /// );
+    /// # Ok::<(), procps_core::SourceError>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns a [`SourceError`] if the source cannot list the processes, read
