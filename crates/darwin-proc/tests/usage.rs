@@ -4,7 +4,7 @@
 
 //! Reads CPU, memory and thread data of live processes.
 
-use std::{process::Command, sync::mpsc, time::Duration};
+use std::{ffi::OsString, process::Command, sync::mpsc, time::Duration};
 
 use assert_matches::assert_matches;
 use darwin_proc::{Error, Pid, RunState, SchedulingPolicy, Status};
@@ -98,7 +98,7 @@ fn a_named_thread_is_listed_by_name() -> Result<(), Box<dyn std::error::Error>> 
         })?;
     ready.recv()?;
 
-    let names: Vec<String> = Pid::current()
+    let names: Vec<OsString> = Pid::current()
         .threads()?
         .into_iter()
         .map(|thread| thread.name)

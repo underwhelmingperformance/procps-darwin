@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::fmt;
+use std::{fmt, os::unix::ffi::OsStrExt};
 
 use darwin_proc::{RunState, SchedulingPolicy, Status};
 
@@ -402,28 +402,25 @@ impl Process {
         }
     }
 
-    /// The command name as Linux reports it: at most 15 bytes of `p_comm`, cut
-    /// at a character boundary. Darwin keeps up to 16 bytes in `p_comm`.
+    /// The command name as Linux reports it: the first 15 bytes of `p_comm`.
+    /// Darwin keeps up to 16 bytes in `p_comm`. As on Linux, the bytes can end
+    /// inside a multi-byte character.
     ///
     /// ```
     /// use darwin_proc::Pid;
     /// use procps_core::{Field, Process};
     ///
     /// let mut info = Pid::current().info()?;
-    /// info.comm = "0123456789abcdef".to_owned();
+    /// info.comm = "0123456789abcdef".into();
     /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
     ///
-    /// assert_eq!(process.linux_comm(), "0123456789abcde");
+    /// assert_eq!(process.linux_comm(), b"0123456789abcde");
     /// # Ok::<(), darwin_proc::Error>(())
     /// ```
     #[must_use]
-    pub fn linux_comm(&self) -> &str {
-        let comm = &self.info.comm;
-        let end = (0..=COMMAND_NAME_LENGTH.min(comm.len()))
-            .rev()
-            .find(|&end| comm.is_char_boundary(end))
-            .unwrap_or(0);
+    pub fn linux_comm(&self) -> &[u8] {
+        let comm = self.info.comm.as_bytes();
 
-        &comm[..end]
+        &comm[..comm.len().min(COMMAND_NAME_LENGTH)]
     }
 }
