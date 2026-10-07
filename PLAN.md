@@ -244,9 +244,10 @@ There are three implementations:
 - `FixtureSource` returns fixed records for tests.
 
 The binaries choose a source once at start-up. They use `LocalSource` when the
-effective user is root, `HelperSource` when the helper's socket exists and
-passes the peer check, and `LocalSource` otherwise. An environment variable
-forces a particular source for debugging and tests.
+effective user is root, `HelperSource` when the helper's socket exists, and
+`LocalSource` otherwise. `HelperSource` uses the socket only if it passes the
+checks below. An environment variable forces a particular source for debugging
+and tests.
 
 ### Helper daemon
 
@@ -260,8 +261,12 @@ whichever is later.
 - The daemon only reads. It never sends signals: `pkill` calls `kill(2)` as the
   invoking user, so the kernel's permission checks still apply.
 - It identifies each client with `getpeereid` on the connection.
-- The client calls `getpeereid` on its end too and refuses to use a socket whose
-  peer is not root.
+- Before it connects, the client checks that the socket's path is a socket that
+  root owns and that has no other links. After it connects, it also checks that
+  `getpeereid` reports root, which means that root called `listen` on the
+  socket. launchd calls `listen` as root for every job's socket, including a
+  user's own launch agent, so `getpeereid` alone cannot tell the helper from
+  another job.
 - Requests and responses are versioned, length-prefixed and encoded with `serde`
   and `postcard`. The daemon refuses a request above a fixed size or one that
   exceeds a time limit.
@@ -676,18 +681,19 @@ needs log rotation.
 
 #### 3.4 Client (done)
 
-`HelperSource`, source selection at start-up, the root peer check and the
-override variable.
+`HelperSource`, source selection at start-up, the checks of the socket's path
+and peer, and the override variable.
 
-`HelperSource` connects to `/var/run/procps-helperd.sock`. Before it sends
-anything, it checks with `getpeereid` that the process listening on the socket
-runs as root, so that the tool never reads data from a socket that another user
-has created at the path. The whole exchange has a 30-second deadline. The
-defaults of the helper's time limits add up to 21 seconds, so the tool receives
-the helper's response or refusal before its own time runs out. Every error
-becomes `SourceError::Helper`. When the helper refuses a request and closes the
-connection while the tool is still writing it, the write fails with `EPIPE` or
-`ENOTCONN`, and the tool then reads the refusal.
+`HelperSource` connects to `/var/run/procps-helperd.sock`. Before it connects,
+it checks that the path is a socket that root owns and that has no other links,
+so that a symbolic or hard link to another socket fails. After it connects, it
+checks that `getpeereid` reports root, which means that root called `listen` on
+the socket. Task 3.6 documents what the checks leave open. The whole exchange
+has a 30-second deadline. The defaults of the helper's time limits add up to 21
+seconds, so the tool receives the helper's response or refusal before its own
+time runs out. Every error becomes `SourceError::Helper`. When the helper
+refuses a request and closes the connection while the tool is still writing it,
+the write fails with `EPIPE` or `ENOTCONN`, and the tool then reads the refusal.
 
 `SourceChoice::choose` decides the source, and the tools will call it at
 start-up. `PROCPS_DARWIN_SOURCE` forces a source when it is `local` or `helper`,
@@ -728,12 +734,11 @@ Apple's own launchd sockets, such as `syslog` and `mDNSResponder`, are directly
 in `/var/run`.
 
 A root-owned directory would have stopped processes other than root from
-creating a file at the socket's path. A process running as a member of the
-`daemon` group can create files in `/var/run`, so it could create a socket at
-the path before launchd does. The client's peer check refuses a socket that a
-process other than root listens on, and the tools then read process data
-themselves. Such a process can therefore deny the tools the helper's data, but
-cannot give them false data. Task 3.6 must document this denial of service.
+creating a file at the socket's path. `/var/run` has no sticky bit, so a process
+running as a member of the `daemon` group can remove or replace the socket at
+any time. The client refuses a path that is not a socket that root owns with one
+link, and the tools then read process data themselves. Task 3.6 must document
+what such a process can still do.
 
 The helper logs to `/var/log/procps-helperd.log`. The log records which users
 ran the tools and when, so both installations create it as `root:admin` with

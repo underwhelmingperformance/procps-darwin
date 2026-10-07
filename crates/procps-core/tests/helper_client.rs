@@ -309,8 +309,66 @@ fn a_socket_with_another_owner_is_not_trusted() -> Result<(), Box<dyn std::error
 
     assert_matches!(
         result,
-        Err(SourceError::Helper(HelperError::Untrusted { found, expected }))
+        Err(SourceError::Helper(HelperError::Owner { found, expected }))
             if (found, expected) == (me, stranger)
+    );
+
+    Ok(())
+}
+
+/// The kind of file at the helper's path.
+#[derive(Clone, Copy, Debug)]
+enum NotASocket {
+    /// A symbolic link to a socket that a fake helper listens on.
+    Link,
+    /// An ordinary file.
+    File,
+}
+
+#[rstest]
+#[case::link(NotASocket::Link)]
+#[case::file(NotASocket::File)]
+fn a_path_that_is_not_a_socket_is_not_trusted(
+    #[case] kind: NotASocket,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let target = directory.path().join("target");
+    let path = directory.path().join("socket");
+    let _socket = match kind {
+        NotASocket::Link => {
+            let socket = UnixListener::bind(&target)?;
+            std::os::unix::fs::symlink(&target, &path)?;
+            Some(socket)
+        }
+        NotASocket::File => {
+            std::fs::write(&path, "")?;
+            None
+        }
+    };
+
+    let result = client(&path)?.snapshot(&SnapshotRequest::default());
+
+    assert_matches!(
+        result,
+        Err(SourceError::Helper(HelperError::NotSocket { path: found })) if found == path
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_socket_with_another_link_is_not_trusted() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let target = directory.path().join("target");
+    let path = directory.path().join("socket");
+    let _socket = UnixListener::bind(&target)?;
+    std::fs::hard_link(&target, &path)?;
+
+    let result = client(&path)?.snapshot(&SnapshotRequest::default());
+
+    assert_matches!(
+        result,
+        Err(SourceError::Helper(HelperError::Links { path: found, links: 2 })) if found == path
     );
 
     Ok(())
@@ -370,7 +428,7 @@ fn helper_or_local_reads_locally_when_the_helper_fails(
 enum Socket {
     /// There is no file at the path.
     Missing,
-    /// A process running as another user listens on the socket.
+    /// The socket belongs to another user.
     Untrusted,
     /// The socket file exists, and connections to it are refused, as they
     /// are when its listen backlog is full.
@@ -395,8 +453,11 @@ fn helper_or_local_stops_using_a_helper_only_when_it_would_fail_again(
             None
         }
     };
-    let stranger = Uid::from(me()?.as_raw() + 1);
-    let source = HelperOrLocal::new(HelperSource::new(&path).owned_by(stranger));
+    let owner = match socket {
+        Socket::Untrusted => Uid::from(me()?.as_raw() + 1),
+        Socket::Missing | Socket::Refusing => me()?,
+    };
+    let source = HelperOrLocal::new(HelperSource::new(&path).owned_by(owner));
     let request = SnapshotRequest::default().for_processes([Pid::current()]);
 
     let read = pids(&source.snapshot(&request)?);
