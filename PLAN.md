@@ -673,11 +673,17 @@ daemon when a connection runs 30 seconds beyond its time limits, and launchd
 starts a new one for the next connection.
 
 The daemon logs JSON to standard error at the level that `PROCPS_DARWIN_LOG`
-sets, or `info`. Each snapshot that the daemon sends logs one `info` event, and
-refusals and faults that a client causes log at `debug`. The log still grows
-with every request, so in task 3.5 the property list must set
-`StandardErrorPath` so that launchd writes the log to a file, and that file
-needs log rotation.
+sets, or `info`. At `info` and above, it logs its start and stop, each snapshot
+that exceeds its time or size limit, and errors that a client cannot cause. Any
+user can send requests as fast as the daemon answers them, and an event for each
+would let that user fill the disk. Each snapshot that the daemon sends, each
+request that it cannot read or that the client abandons, and each value that it
+cannot read from a process therefore log at `debug`. Any user can start a
+process and then delete its executable, and reading that process's executable
+path then fails. A snapshot that exceeds a limit keeps a worker for seconds,
+which limits how often one user can cause a warning. In task 3.5 the property
+list sets `StandardErrorPath` so that launchd writes the log to a file, and
+newsyslog rotates the file.
 
 #### 3.4 Client (done)
 
@@ -740,12 +746,13 @@ any time. The client refuses a path that is not a socket that root owns with one
 link, and the tools then read process data themselves. Task 3.6 must document
 what such a process can still do.
 
-The helper logs to `/var/log/procps-helperd.log`. The log records which users
-ran the tools and when, so both installations create it as `root:admin` with
-mode 0640 before launchd starts the helper. launchd would otherwise create it
-with mode 0644. A newsyslog rule in `packaging/newsyslog/` rotates the log at 1
-MiB and keeps five old logs. The `B` flag stops newsyslog from writing a
-plain-text line into the JSON log.
+The helper logs to `/var/log/procps-helperd.log`. The log can record which users
+ran the tools and when: every request at the `debug` level, and requests that
+exceed a limit at the default level. Both installations therefore create it as
+`root:admin` with mode 0640 before launchd starts the helper. launchd would
+otherwise create it with mode 0644. A newsyslog rule in `packaging/newsyslog/`
+rotates the log at 1 MiB and keeps five old logs. The `B` flag stops newsyslog
+from writing a plain-text line into the JSON log.
 
 The helper receives the log only as its standard error, which launchd opens, so
 the helper cannot reopen the log after a rotation. A helper that tools such as

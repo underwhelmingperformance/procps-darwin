@@ -219,7 +219,7 @@ impl<S: ProcessSource> Server<S> {
         };
 
         match self.respond(stream, response)? {
-            Response::Snapshot(snapshot) => tracing::info!(
+            Response::Snapshot(snapshot) => tracing::debug!(
                 processes = snapshot.processes.len(),
                 elapsed = ?started.elapsed(),
                 "sent a snapshot"

@@ -76,7 +76,7 @@ fn field<T>(pid: Pid, result: Result<T, darwin_proc::Error>) -> Result<Field<T>,
         Err(darwin_proc::Error::Denied { .. }) => Ok(Field::Denied),
         Err(darwin_proc::Error::Unsupported { .. }) => Ok(Field::Unsupported),
         Err(error) => {
-            tracing::warn!(%pid, %error, "read failed");
+            tracing::debug!(%pid, %error, "read failed");
             Ok(Field::Failed)
         }
     }

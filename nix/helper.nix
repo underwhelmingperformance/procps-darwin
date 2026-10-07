@@ -59,8 +59,9 @@ in {
 
       environment.etc."newsyslog.d/procps-helperd.conf".source = newsyslog;
 
-      # The log records which users ran the tools and when. launchd would create
-      # it with mode 0644, so create it first, readable only by root and admin.
+      # The log can record which users ran the tools and when. launchd would
+      # create it with mode 0644, so create it first, readable only by root and
+      # admin.
       system.activationScripts.extraActivation.text = ''
         touch ${log}
         chown root:admin ${log}
