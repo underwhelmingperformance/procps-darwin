@@ -596,7 +596,7 @@ the snapshot, and passes on private values only if the caller may read the
 process at both readings and its start time is the same. A set-user-ID program
 that resets all its IDs to the user's and then executes another program between
 the two readings leaves the process looking unchanged, because that exec clears
-`P_SUGID`. Task 3.6 will document that limit.
+`P_SUGID`. `docs/helper-security.md` documents that limit.
 
 `proc_pid_rusage` returns the disk I/O counts with the CPU time and memory, so
 `darwin-proc` splits the disk I/O counts, with the instruction, cycle and energy
@@ -694,12 +694,13 @@ and peer, and the override variable.
 it checks that the path is a socket that root owns and that has no other links,
 so that a symbolic or hard link to another socket fails. After it connects, it
 checks that `getpeereid` reports root, which means that root called `listen` on
-the socket. Task 3.6 documents what the checks leave open. The whole exchange
-has a 30-second deadline. The defaults of the helper's time limits add up to 21
-seconds, so the tool receives the helper's response or refusal before its own
-time runs out. Every error becomes `SourceError::Helper`. When the helper
-refuses a request and closes the connection while the tool is still writing it,
-the write fails with `EPIPE` or `ENOTCONN`, and the tool then reads the refusal.
+the socket. `docs/helper-security.md` describes what the checks leave open. The
+whole exchange has a 30-second deadline. The defaults of the helper's time
+limits add up to 21 seconds, so the tool receives the helper's response or
+refusal before its own time runs out. Every error becomes `SourceError::Helper`.
+When the helper refuses a request and closes the connection while the tool is
+still writing it, the write fails with `EPIPE` or `ENOTCONN`, and the tool then
+reads the refusal.
 
 `SourceChoice::choose` decides the source, and the tools will call it at
 start-up. `PROCPS_DARWIN_SOURCE` forces a source when it is `local` or `helper`,
@@ -743,8 +744,8 @@ A root-owned directory would have stopped processes other than root from
 creating a file at the socket's path. `/var/run` has no sticky bit, so a process
 running as a member of the `daemon` group can remove or replace the socket at
 any time. The client refuses a path that is not a socket that root owns with one
-link, and the tools then read process data themselves. Task 3.6 must document
-what such a process can still do.
+link, and the tools then read process data themselves. `docs/helper-security.md`
+describes what such a process can still do.
 
 The helper logs to `/var/log/procps-helperd.log`. The log can record which users
 ran the tools and when: every request at the `debug` level, and requests that
@@ -765,7 +766,7 @@ connection while clients keep arriving. Compressing a rotated log would delete
 the file that an old helper still writes to, so the rule does not compress
 rotated logs.
 
-#### 3.6 Threat model
+#### 3.6 Threat model (done)
 
 `docs/helper-security.md` covering untrusted local clients, denial of service
 through expensive requests, information disclosure under the access policy, pid
@@ -782,6 +783,22 @@ arguments, because macOS withholds them. What `pgrep -f` and `pkill -f` can
 match for those users therefore changes from one run to the next. A timeout or
 `Busy` does not make a tool stop using the helper, so a helper whose connections
 get stuck costs `top` up to 30 seconds on each refresh.
+
+#### 3.7 Bounded snapshots
+
+Make a snapshot stop when its time limit passes or its encoding would exceed
+`Response::LIMIT`. The helper cannot interrupt a snapshot yet, and it checks the
+response's size only after it has built the encoding.
+
+Any user controls the cost of every snapshot that includes their processes. A
+process can split its memory into millions of regions, and a walk of its regions
+visits each one. When a request asks for the code and data totals, which every
+user receives, the helper walks the regions of every process that the request
+selects, whoever sent the request. One request can therefore keep a worker for
+longer than the watchdog allows, and the watchdog then stops the helper and
+drops every user's connections. A request can also make the helper keep
+gigabytes in memory. `ProcessSource::snapshot` needs a deadline and a size
+budget for this.
 
 ### Phase 4: pgrep and pkill
 
