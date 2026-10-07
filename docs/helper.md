@@ -30,8 +30,9 @@ within a second once it has no open connection. launchd then starts a new helper
 for the next connection.
 
 The helper logs JSON to `/var/log/procps-helperd.log`, and newsyslog rotates the
-log. The log records which users ran the tools and when, so only root and
-members of the `admin` group can read it.
+log. The log can record which users ran the tools and when: every request at the
+`debug` level, and requests that exceed a limit at the default level. Only root
+and members of the `admin` group can read it.
 
 ## Installing with nix-darwin
 
