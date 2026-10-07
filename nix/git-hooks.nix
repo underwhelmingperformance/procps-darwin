@@ -17,14 +17,16 @@
       settings.hooks = {
         check-added-large-files.enable = true;
         check-yaml.enable = true;
-        # A golden file records a command's output byte for byte.
+        # A golden file records a command's output byte for byte. The hooks
+        # leave the whitespace of copied code as upstream has it, so that an
+        # update can be compared with upstream.
         end-of-file-fixer = {
           enable = true;
-          excludes = ["^crates/procps-harness/golden/"];
+          excludes = ["^crates/procps-harness/golden/" "^crates/darwin-proc/glibc-regex/"];
         };
         trim-trailing-whitespace = {
           enable = true;
-          excludes = ["^crates/procps-harness/golden/"];
+          excludes = ["^crates/procps-harness/golden/" "^crates/darwin-proc/glibc-regex/"];
         };
 
         wrapscallion = {

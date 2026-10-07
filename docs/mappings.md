@@ -352,3 +352,46 @@ a signal and `pkill -int` is read as the options `-i`, `-n` and `-t`. In
 glibc's rules for the locale. glibc gives `tr_TR`'s rules to other locales, such
 as `az_AZ` and `ku_TR`, and has rules of its own for `mt_MT`, but Darwin
 installs none of them.
+
+## Regular expressions
+
+procps-ng compiles patterns with glibc's `regcomp` and matches them with
+`regexec`. Darwin's extended syntax lacks glibc's extensions, such as
+back-references, `\w` and `\<`. Darwin's enhanced syntax has most of them, but
+it gives escapes such as `\d` meanings that glibc's syntax lacks, and Darwin's
+engine misses matches for patterns such as `(^|\<)sshd`. The tools therefore use
+glibc 2.44's regular expression code, which darwin-proc compiles from
+`crates/darwin-proc/glibc-regex`, and they print glibc's error messages.
+
+Outside glibc, the code has no access to glibc's locale data, so it uses
+Darwin's functions for character classes, case conversion and multi-byte
+characters. Two differences follow in locales other than C:
+
+- glibc reads ranges, equivalence classes and collating elements by the
+  collation rules of the `LC_COLLATE` locale. glibc has no rules for C, POSIX,
+  C.UTF-8 and the other locales whose names start with `C.`. In those locales,
+  glibc compares a character of the text by its code point, and a range end by
+  its byte value, so in C.UTF-8 a bracket expression whose ends are the bytes
+  0xE9 and 0xEF matches `é` (U+00E9). glibc rejects a range with a multi-byte
+  end, such as `[à-ü]` in C.UTF-8, with `Invalid collation character`. A change
+  to `build_range_exp` makes the tools behave in the same way in those locales.
+
+  The code outside glibc has no collation rules. In the other locales, the tools
+  compare the wide characters that Darwin's `btowc` and `mbrtowc` return, which
+  are code points in UTF-8 and ISO 8859-1, and accept an equivalence class or a
+  collating element only for a one-byte character. In `en_US.UTF-8` and
+  `en_US.ISO-8859-1`, these expressions match different characters:
+
+  | Expression | glibc matches      | The tools match                                            |
+  | ---------- | ------------------ | ---------------------------------------------------------- |
+  | `[a-z]`    | `e`, `é`, `ð`, `z` | `e`, `z`                                                   |
+  | `[à-ü]`    | `e`, `é`, `ð`      | `é`, `ð`                                                   |
+  | `[[=e=]]`  | `e`, `é`, `E`, `É` | `e`                                                        |
+  | `[[=é=]]`  | `e`, `é`, `E`, `É` | `é` in ISO 8859-1; in UTF-8, `Invalid collation character` |
+
+- Character classes such as `[[:alpha:]]` and `\w`, and the case conversion of
+  `-i`, follow Darwin's tables for the locale. For characters outside ASCII,
+  these can differ from glibc's. The exception is the Turkish `i`: glibc's
+  Turkish locales pair `i` with `İ` and `I` with `ı`, whereas Darwin's pair `i`
+  with `I`. The tools fold these four letters as glibc does, so in
+  `tr_TR.UTF-8`, `pgrep -i INIT` does not select `init`.

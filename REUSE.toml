@@ -1,5 +1,43 @@
 version = 1
 
+# glibc's regular expression code and the gnulib files that it needs outside
+# glibc, copied from upstream with the changes marked `procps-darwin`. Their
+# headers state the licence in prose.
+[[annotations]]
+path = "crates/darwin-proc/glibc-regex/**"
+SPDX-FileCopyrightText = "1985-2026 Free Software Foundation, Inc."
+SPDX-License-Identifier = "LGPL-2.1-or-later"
+
+# regcomp.c and regex_internal.h contain our changes, so they also have our
+# copyright line.
+[[annotations]]
+path = [
+  "crates/darwin-proc/glibc-regex/regcomp.c",
+  "crates/darwin-proc/glibc-regex/regex_internal.h",
+]
+SPDX-FileCopyrightText = [
+  "1985-2026 Free Software Foundation, Inc.",
+  "2026 Iain Lane <iain@orangesquash.org.uk>",
+]
+SPDX-License-Identifier = "LGPL-2.1-or-later"
+
+# gnulib's configure writes config.h, and copies into it text from gnulib's m4
+# files, whose licence is FSFULLR. A later entry takes precedence, so this
+# entry follows the entry for the directory.
+[[annotations]]
+path = "crates/darwin-proc/glibc-regex/config.h"
+SPDX-FileCopyrightText = "2007-2026 Free Software Foundation, Inc."
+SPDX-License-Identifier = "FSFULLR"
+
+# cdefs.h has a second copyright holder.
+[[annotations]]
+path = "crates/darwin-proc/glibc-regex/cdefs.h"
+SPDX-FileCopyrightText = [
+  "1992-2026 Free Software Foundation, Inc.",
+  "The GNU Toolchain Authors",
+]
+SPDX-License-Identifier = "LGPL-2.1-or-later"
+
 # Tools generate these files, and generated output has no author who could own
 # its copyright. NONE records that, and CC0-1.0 waives any right that a
 # jurisdiction might still grant.

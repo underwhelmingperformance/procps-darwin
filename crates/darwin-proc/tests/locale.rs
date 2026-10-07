@@ -5,13 +5,14 @@
 //! Sets the locale of the calling thread.
 
 use std::{
-    ffi::CStr,
+    ffi::{CStr, OsStr},
     io::Write,
+    os::unix::ffi::OsStrExt,
     process::{Command, Stdio},
     thread,
 };
 
-use darwin_proc::{CaseFolding, Locale};
+use darwin_proc::{CaseFolding, Locale, Regex};
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 
@@ -45,6 +46,35 @@ fn a_locale_folds_case_as_glibc_folds_it(#[case] name: &CStr, #[case] expected: 
         darwin_proc::set_locale(name).map(|locale| locale.case_folding()),
         Some(expected)
     );
+}
+
+// glibc's Turkish locales do not pair `i` with `I`, so a pattern with `I` does
+// not match `i` under `-i`. In UTF-8, `i` pairs with `İ`. In ISO 8859-9, `i`
+// pairs with the byte 0xDD, and `I` with the byte 0xFD.
+#[rstest]
+#[case::capital_i_in_utf8(c"tr_TR.UTF-8", b"^INIX$", b"inix", false)]
+#[case::mixed_case_in_utf8(c"tr_TR.UTF-8", b"^Inix$", b"inix", false)]
+#[case::bracket_in_utf8(c"tr_TR.UTF-8", b"^IN[I]X$", b"inix", false)]
+#[case::small_i_in_utf8(c"tr_TR.UTF-8", b"^inix$", b"inix", true)]
+#[case::dotted_capital_i_in_utf8(c"tr_TR.UTF-8", "^\u{130}NX$".as_bytes(), b"inx", true)]
+#[case::capital_i_in_latin5(c"tr_TR.ISO8859-9", b"^INIX$", b"inix", false)]
+#[case::dotted_capital_i_in_latin5(c"tr_TR.ISO8859-9", b"^\xddNX$", b"inx", true)]
+#[case::dotless_small_i_in_latin5(c"tr_TR.ISO8859-9", b"^\xfdNX$", b"INX", true)]
+#[case::dotless_small_i_in_latin5_text(c"tr_TR.ISO8859-9", b"^INX$", b"\xfdnx", true)]
+#[case::capital_i_in_english(c"en_US.UTF-8", b"^INIX$", b"inix", true)]
+fn a_pattern_folds_case_as_glibc_folds_it(
+    #[case] locale: &CStr,
+    #[case] pattern: &[u8],
+    #[case] text: &[u8],
+    #[case] matches: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    darwin_proc::set_locale(locale).ok_or("the locale exists")?;
+
+    let regex = Regex::new(OsStr::from_bytes(pattern), true).map_err(|error| error.message)?;
+
+    assert_eq!(regex.is_match(OsStr::from_bytes(text)), matches);
+
+    Ok(())
 }
 
 #[test]
@@ -120,6 +150,37 @@ fn another_thread_keeps_its_locale() -> Result<(), Box<dyn std::error::Error>> {
             Locale::current()
         ),
         (Some("UTF-8".to_owned()), before)
+    );
+
+    Ok(())
+}
+
+// Matching these patterns uses the C library's case conversion and character
+// classes, so they match only in the UTF-8 locale. The main thread uses the C
+// locale, so a match shows that each expression kept the locale that compiled
+// it.
+#[test]
+fn an_expression_matches_in_the_locale_that_compiled_it() -> Result<(), Box<dyn std::error::Error>>
+{
+    let compiled = thread::spawn(|| {
+        darwin_proc::set_locale(c"en_US.UTF-8").ok_or("en_US.UTF-8 exists")?;
+
+        [("^CAFÉ$", true), ("^caf[[:alpha:]]$", false)]
+            .map(|(pattern, ignore_case)| Regex::new(pattern.as_ref(), ignore_case))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.message)
+    })
+    .join()
+    .map_err(|_| "the thread panicked")??;
+    let matches: Vec<bool> = compiled
+        .iter()
+        .map(|regex| regex.is_match("café".as_ref()))
+        .collect();
+
+    assert_eq!(
+        (Locale::current().codeset().to_owned(), matches),
+        ("US-ASCII".to_owned(), vec![true, true])
     );
 
     Ok(())

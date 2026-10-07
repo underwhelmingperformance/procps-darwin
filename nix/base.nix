@@ -92,9 +92,22 @@
       inherit craneLib rustfmtNightly rustToolchain;
 
       commonArgs = {
-        src = craneLib.cleanCargoSource inputs.self;
+        # darwin-proc's build script compiles C files, and Crane's filter drops
+        # `.c` and `.h` files.
+        src = lib.cleanSourceWith {
+          src = inputs.self;
+          name = "source";
+          filter = path: type:
+            craneLib.filterCargoSources path type
+            || builtins.match ".*\\.[ch]" path != null;
+        };
         strictDeps = true;
         cargoExtraArgs = "--locked --workspace";
+
+        # The cc crate passes `--target=arm64-apple-macosx`. The Nix compiler
+        # wrapper warns about any target other than `arm64-apple-darwin`,
+        # although LLVM reads both names as this platform.
+        NIX_CC_WRAPPER_SUPPRESS_TARGET_WARNING = 1;
       };
 
       cargoArtifacts = craneLib.buildDepsOnly config.procps-darwin.commonArgs;

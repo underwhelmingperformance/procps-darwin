@@ -58,13 +58,17 @@ exporter.
   from procps-ng's source. List it in the procps-ng entry of `REUSE.toml`. The
   `reuse` test in `procps-harness` fails when that list differs from the golden
   files that contain the usage text.
-- procps-ng is GPL-2.0-or-later, so its code can be translated into this
-  project. Check each file's licence header first: GPL-2.0-only code cannot be
-  ported.
+- procps-ng is GPL-2.0-or-later, and its library is LGPL-2.1-or-later, so its
+  code can be translated into this project. Check each file's licence header
+  first: GPL-2.0-only code cannot be ported.
 - A file with code translated from procps-ng has an `SPDX-FileCopyrightText`
   line for each copyright holder in the upstream file, in addition to ours, and
   a comment with the upstream path and version, for example
   `procps-ng v4.0.7 src/pgrep.c`. Its licence is `GPL-3.0-or-later`.
+- Code copied from another project, such as glibc's regular expression code in
+  `crates/darwin-proc/glibc-regex`, keeps its own headers, and each change to it
+  is marked `procps-darwin`. An entry in `REUSE.toml` records its copyright and
+  licence.
 - uutils/procps uses the MIT licence, and its code can be reused. A file with
   code from it keeps the uutils copyright line and uses
   `GPL-3.0-or-later AND MIT`. The first such file also needs
