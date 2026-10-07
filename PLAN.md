@@ -1055,11 +1055,64 @@ Tests replace the read and the signal through the `Signaller` trait.
 `-m`, `-q`, `--cgroup`, `--ns` and `--nslist` exit with status 2 as described
 under compatibility rules. Task 4.1 implements the refusal.
 
-#### 4.6 Tests
+#### 4.6 Tests (done)
 
 Reference scenarios through the harness, and macOS integration tests that start
-children with known arguments, environment, nice value, process group, session
-and pseudo-terminal.
+children with known arguments, environment, process group, session and
+pseudo-terminal.
+
+The reference scenarios of tasks 4.1 to 4.4 compare `pgrep` and `pkill` with
+procps-ng. `crates/procps/tests/pgrep.rs` runs both tools against children on
+the live system. The tests select children with `pgrep` by command line,
+environment, process group, parent, session, terminal, age and start order, and
+run `pkill` with a signal and `-e`. The age test also selects launchd by its
+pid. Each child is the test binary itself, running an ignored test with a marker
+argument that no other process uses: the test binary's pid followed by a
+counter. A child that starts children of its own gives them its marker followed
+by a counter. The environment and age tests, and the process group test for
+`-P`, also run a query that must select no process. The process group, session
+and start-order tests check that a query selects some of their children and
+leaves out the others. The process group and session tests start two children in
+one process group or session. A child reports on standard output that it is
+ready. The tests wait for that report, and for the end of a child, with
+`poll(2)` and a deadline, and they do not sleep for a fixed time or poll the
+process table. The only system tool that they start is `sandbox-exec`. The
+`pkill` test starts its child and `pkill` in a sandbox that lets them signal
+only the processes in the sandbox, so a selection bug cannot signal the user's
+other processes. macOS refuses to apply that sandbox under some sandbox
+profiles, including the profile that Nix applies to each build on macOS, even
+with `sandbox = false`. When `sandbox-exec` is refused for that reason, the test
+sends signal 0 to every process except the test binary, its ancestors and its
+descendants. It ignores the processes that run the test binary with a marker of
+the test run. It also ignores a process that is exiting, which includes a
+zombie. A zombie accepts signal 0 from every process, even from a sandbox, and
+the kernel discards every signal to a process that is exiting. It runs `pkill`
+without a sandbox only if no other process accepts the signal. The check does
+not probe the ancestors. In a Nix build, cargo and the builder's shell run as
+the build user, and the processes above them, such as the Nix daemon and
+launchd, run as root. In a multi-user Nix installation, the build user owns only
+the build's processes, so the check passes, and a process that starts after the
+check can accept the signal only if it belongs to the build. Elsewhere, when
+other processes of the user accept the signal, the test fails and lists them.
+Further tests run the fallback in an outer sandbox that confines signals, and
+under which macOS refuses the test's sandbox. They run it alone, with an
+orphaned process of the test run, and with an orphaned process of no run. They
+also check, in a sandbox, that the process that runs `pkill` fails before it
+runs `pkill` when its parent is in its sandbox or when
+`PROCPS_DARWIN_TEST_CONFINEMENT` is missing or has an unknown value. macOS
+refuses their sandboxes in a Nix build, so they run only outside Nix.
+`nix/checks.nix` sets `PROCPS_DARWIN_TEST_NIX_BUILD` for the tests. A refusal
+skips a scenario only when that variable is set, and otherwise fails the test.
+
+For the session and terminal test, the child calls `setsid`, opens a
+pseudo-terminal with rustix, and makes it its controlling terminal. It then
+starts a member of its session in a new process group, and reports the
+terminal's name and the member's pid. For the environment test, the child must
+also not be an Apple platform binary such as `/bin/sleep`: macOS 27 withholds
+the environment of an Apple platform binary from every other process, but gives
+the environment of an ad hoc signed program, such as the test binary, to the
+other processes of the same user. `pgrep` has no option that selects by nice
+value, so the nice-value test moves to task 5.7.
 
 ### Phase 5: ps
 
@@ -1103,7 +1156,7 @@ the `COLUMNS` and `LINES` environment variables.
 
 Reference scenarios for each predefined format and modifier, integration tests,
 and a check that numeric columns roughly agree with `/bin/ps` for the same
-processes.
+processes. An integration test starts a child with a known nice value.
 
 ### Phase 6: top
 
@@ -1178,12 +1231,12 @@ summary of `docs/mappings.md`.
 - The reference harness (task 0.3) is the oracle for option parsing, error
   messages, exit codes and output layout.
 - macOS integration tests start child processes with controlled attributes and
-  inspect them with the real binaries. Tests that need root run under `sudo` in
-  CI; GitHub's macOS runners allow passwordless `sudo`. These tests need the
-  live process table, so CI runs them in a step of their own, outside
-  `nix flake check`. The reference test also reads the live process table, but
-  each scenario selects only processes in its own session, so it runs inside
-  `nix flake check`.
+  inspect them with the real binaries. They read the live process table, but
+  each test selects only its own children or launchd, so they run inside
+  `nix flake check`. The reference test also reads the live process table, and
+  each scenario selects only processes in its own session, so it runs there too.
+  A test that needs root will run under `sudo` in a CI step of its own; GitHub's
+  macOS runners allow passwordless `sudo`.
 - Helper tests cover the protocol, the access policy with injected credentials,
   and the transport on a temporary socket.
 

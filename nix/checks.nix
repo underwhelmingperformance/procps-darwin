@@ -46,7 +46,12 @@
           env.RUSTDOCFLAGS = "--deny warnings";
         });
 
-      tests = craneLib.cargoTest args;
+      # The pkill test's scenarios cannot apply their sandboxes in the build's
+      # sandbox. They skip only when this variable is set, and fail otherwise.
+      tests = craneLib.cargoTest (args
+        // {
+          env.PROCPS_DARWIN_TEST_NIX_BUILD = "1";
+        });
 
       deny = craneLib.cargoDeny (commonArgs
         // {
