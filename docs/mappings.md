@@ -206,6 +206,84 @@ its command line or its memory regions. Its `exe` column therefore shows `-`,
 its command line shows `[kernel_task]` as for a Linux kernel thread, and the
 region columns show `-`.
 
+## Signals
+
+`pkill` accepts procps-ng's signal names and numbers. A name selects the Darwin
+signal with that name, and a number other than 32 to 64 is sent unchanged.
+Darwin assigns different numbers to several signals: for example, `pkill -10`
+sends `SIGUSR1` on Linux and `SIGBUS` on Darwin. A script that uses names, such
+as `pkill -USR1`, sends the same signal on both systems. Numbers 1 to 6, 8, 9,
+11, 13 to 15, 21, 22 and 24 to 28 refer to the same signal on both.
+
+Darwin has no `SIGCLD`, and defines `SIGPOLL` only in strict POSIX mode, with
+the number of `SIGEMT`. On Linux they are other names for `SIGCHLD` and `SIGIO`,
+so the tools accept `CLD` and `POLL` and send Darwin's `SIGCHLD` and `SIGIO`.
+
+Darwin lacks `SIGPWR`, `SIGSTKFLT` and the real-time signals. The tools
+recognise their names as procps-ng does on Linux: `PWR`, `STKFLT`, `RTMIN`,
+`RTMAX`, `RTMIN+n` and `RTMAX-n`. They also read the numbers 32 to 64, which are
+Linux's real-time signals, as real-time signals. `pkill` then exits with status
+2, as for the other options for Linux concepts, unless a later `--signal`
+replaces the signal. `pgrep` uses the signal only for `-H`, and exits with
+status 2 only then.
+
+Darwin's `SIGEMT` and `SIGINFO`, which Linux lacks, are accepted as the values
+`EMT` and `INFO` of `--signal`, whereas procps-ng on Linux reports them as
+unknown signals. procps-ng on Linux reads `pkill -emt` as `-e -m -t` and
+`pkill -info` as `-i -n -f -o`, so the tools also read `-emt` and `-info` as
+options.
+
+## Error descriptions
+
+Some of procps-ng's messages end with the C library's description of an error
+number, such as `Unable to open pidfile: No such file or directory`. For the
+error numbers that both systems have, the tools print glibc's descriptions.
+Darwin's description differs for 25 of them, such as `ENXIO`, which Darwin
+describes as `Device not configured` and glibc as `No such device or address`.
+Linux gives `ENOTSUP` and `EOPNOTSUPP` one number, which glibc describes as
+`Operation not supported`, so the tools print that for both. An error number
+that only Darwin has, such as `EAUTH`, keeps Darwin's description.
+
+For error number 0, glibc's description is `Success` and Darwin's is
+`Undefined error: 0`. When `-L` finds no lock on the pid file because both lock
+calls succeeded, procps-ng prints the description of `errno`. A successful call
+leaves `errno` unchanged, so the value is whatever an earlier library call left.
+In the reference harness, in the C locale, the value is 0, so procps-ng prints
+`Success`. In C.UTF-8, `setlocale` has left `ENOENT`, so procps-ng prints
+`No such file or directory`. The tools print `Success` in every locale.
+
+## Closed descriptors
+
+procps-ng's `main` calls `epoll_create` before anything else, so its epoll
+descriptor takes the lowest descriptor that was closed when it started. Linux
+refuses to open an epoll descriptor through `/dev/fd`, so
+`pgrep -F /dev/stdin <&-` reports `No such device or address`, and the path of
+any other descriptor that was closed at start-up does not exist. The tools give
+the same errors. Linux's procfs accepts only the canonical decimal form of a
+descriptor's number, so `/dev/fd/03` and `/dev/fd/+3` do not exist on Linux, and
+the tools report `No such file or directory` for them too.
+
+darwin-proc records which of the descriptors 0 to 255 were closed at start-up.
+For a closed descriptor above 255, `pgrep -F /dev/fd/<n>` reports Darwin's
+`Bad file descriptor`. Linux reports `No such device or address` if the
+descriptor is procps-ng's epoll descriptor, and `No such file or directory`
+otherwise.
+
+## Locks on a pid file
+
+With `-L`, procps-ng checks that another process has locked the pid file with
+`flock` or `fcntl`. Linux locks a pipe as it locks a file, so for a pid file on
+standard input from a pipe, both lock calls succeed. Darwin's `flock` fails on a
+pipe or a socket with `ENOTSUP`, and `fcntl` with `EBADF`. For those file types,
+the tools treat these errors as granted locks, as Linux grants them.
+
+## Message language
+
+procps-ng translates its messages with gettext, and glibc translates the
+messages of `getopt_long` and the descriptions of error numbers. Both follow the
+locale. The tools have no translations, and print every message in English, as
+procps-ng and glibc do in the C locale.
+
 ## Locales
 
 glibc normalises the codeset in a locale name, so `C.utf8` and

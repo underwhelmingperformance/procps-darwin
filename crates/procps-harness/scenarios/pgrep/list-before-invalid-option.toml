@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a list that is not valid is reported before a later getopt error"
+command = ["pgrep", "-p", "abc", "-z"]

@@ -4,4 +4,6 @@
 
 //! procps-ng's `pkill` for macOS.
 
-fn main() {}
+fn main() -> std::process::ExitCode {
+    procps::pgrep::entry("pkill")
+}

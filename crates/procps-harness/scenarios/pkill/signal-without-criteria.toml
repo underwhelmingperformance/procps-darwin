@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "pkill with only a signal prints an error and a hint to use --help, with status 2"
+command = ["pkill", "-9"]

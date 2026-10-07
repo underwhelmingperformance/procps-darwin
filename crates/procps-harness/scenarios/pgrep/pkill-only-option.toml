@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "pgrep rejects -e, which only pkill has"
+command = ["pgrep", "-s", "0", "-e", "harness-alpha"]

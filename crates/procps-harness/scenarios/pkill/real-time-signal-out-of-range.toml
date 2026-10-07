@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a real-time signal above RTMAX is not a signal option, so its first letter is an invalid option"
+command = ["pkill", "-s", "0", "-RTMIN+31", "harness-alpha"]

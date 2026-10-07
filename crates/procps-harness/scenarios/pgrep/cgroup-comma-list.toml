@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a --cgroup list of only a comma prints an error and the usage text, with status 2, before the tools refuse the Linux option"
+command = ["pgrep", "--cgroup", ","]

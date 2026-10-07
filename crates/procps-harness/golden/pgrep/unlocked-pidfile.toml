@@ -1,0 +1,5 @@
+status = 1
+stdout = ""
+stderr = """
+pgrep: Locking check for pidfile failed: Success
+"""

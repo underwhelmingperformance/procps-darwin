@@ -197,6 +197,9 @@ set size, scheduling policy names and the `f` flags column.
    different meaning.
 6. `docs/mappings.md` lists every approximation, with the Darwin source of the
    value and how it differs from Linux.
+7. Messages are in English. procps-ng and glibc translate their messages for the
+   locale. The tools always print the messages that procps-ng prints in the C
+   locale.
 
 ## Architecture
 
@@ -310,11 +313,13 @@ Task 3.2 records where each Darwin extension field falls.
   forms in one command line, which `clap` cannot express. uutils/procps uses
   `clap` for `ps` and rejects `ps aux`, `ps -u USER`, `ps -s SID` and `--sort`
   as a result. Its tables of format specifiers and headers can still be reused.
-- Errors use `thiserror` in every crate. Each binary's top-level error enum
-  decides its exit status.
-- The tools write through a locked, buffered standard output and restore the
-  default `SIGPIPE` disposition, so a closed pipe terminates them silently as it
-  terminates procps-ng.
+- Errors use `thiserror` in every crate. Each binary, or each set of binaries
+  that share an entry function, has a top-level error enum, which decides the
+  exit status.
+- The tools buffer standard output as C does, through `procps::output`, which
+  calls `write(2)` itself. They keep the `SIGPIPE` disposition that they
+  inherit, so a closed pipe terminates them silently as it terminates procps-ng,
+  unless the parent ignores `SIGPIPE`.
 - Library crates are instrumented with `tracing`. The tools install a subscriber
   only when `PROCPS_DARWIN_LOG` is set, so by default they print nothing beyond
   procps-ng's output.
@@ -848,12 +853,114 @@ the default 10-second limit, it refuses the request at the memory limit after
 
 ### Phase 4: pgrep and pkill
 
-#### 4.1 Option parsing
+#### 4.1 Option parsing (done)
 
 Parse every procps-ng 4.0.7 option, including `-<signal>`, `--signal`, combined
 short options and long options. Reference scenarios cover usage text, error
 messages and exit codes (0 for a match, 1 for no match, 2 for a syntax error, 3
 for a fatal error).
+
+`procps::pgrep::Options::parse` reads the command line into typed options.
+`pkill` first removes the first argument of the form `-<signal>`, as procps-ng's
+`signal_option` does.
+
+`clap` checks the syntax, and returns the values grouped by option, not in
+command-line order. procps-ng handles each option as `getopt_long` returns it,
+so the parser replays each occurrence in command-line order through a port of
+procps-ng's option loop. The first failure then decides the error, and `-h` or
+`-V` takes effect where it appears. The replay sorts the occurrences by their
+positions, so it needs the position of every occurrence. With
+`ArgAction::Count`, `clap` keeps only the last position, so each flag uses
+`ArgAction::Append`.
+
+`clap`'s error messages are not glibc's. When `clap` rejects a command line, the
+parser scans the arguments as glibc's `getopt_long` does, to find the first
+error and glibc's message for it. The tool prints the message prefixed with
+`argv[0]`, and the message contains the original bytes of the arguments.
+`getopt_long` returns each option before the error to procps-ng's loop, which
+handles it before `getopt_long` reports the error, so the parser replays those
+options first. An option such as `-h` or an invalid list then ends the loop
+before the error is reported.
+
+One table lists every option with its short form in each tool, and both the
+`clap` command and the scanner are built from it. The options are in the order
+of procps-ng's `longopts`, because glibc lists the possibilities of an ambiguous
+abbreviation in that order. With `POSIXLY_CORRECT` set, the options end at the
+first operand, as in glibc. Before `clap` runs, `detach_equals_values` moves a
+value such as the `=x` of `-d=x` into an argument of its own, because `clap`
+would drop the `=`.
+
+The pid file of `-F` is read where procps-ng reads it, after the checks of `-L`
+without `-F` and of `-F` with `-p`, and before the checks of `--quiet` and the
+pattern. An error in reading the pid file therefore comes before the errors of
+those later checks.
+
+Numbers are read as procps-ng reads them. Numeric list elements are read with
+`strict_atol`'s limits. Signal numbers, given as `-<signal>` or with `--signal`,
+are read with a reimplementation of C's `strtol`. A value of `--signal` that
+starts with a digit but is not a signal, and the value of `-O`, are read as
+glibc's `atoi` reads them, which truncates the number to an `int`.
+
+`--cgroup`, `--ns` and `--nslist`, `pkill`'s `-q` and `-m`, and the names of
+Linux signals that Darwin lacks are handled as procps-ng handles them. After
+procps-ng's checks, where procps-ng would start to select processes, the parser
+refuses the first of these options that is still in effect, with status 2.
+`--ns` with a pid that `atoi` reads as 0 is not refused, because procps-ng's
+case for `--ns` then falls through to the case for `-r` and uses the argument as
+the list of run states. `pgrep` accepts `--queue`, `--mrelease` and `--echo` and
+ignores them, as procps-ng does.
+
+A later `--signal` replaces a Linux signal, as it replaces any signal. `pkill`
+applies `-<signal>` before every `--signal`, wherever `-<signal>` appears.
+`pgrep` ignores the signal unless `-H` is given. The names of Darwin's `SIGEMT`
+and `SIGINFO` are signals only as values of `--signal`, because procps-ng on
+Linux reads `pkill -emt` as `-e -m -t`.
+
+A signal number keeps Darwin's meaning, so `pkill -10` sends Darwin's signal 10,
+`SIGBUS`, whereas on Linux it sends `SIGUSR1`. A user on macOS finds signal
+numbers in macOS's `kill -l` and `<signal.h>`, so the tools use Darwin's
+numbering. Signal names mean the same on both systems, and `docs/mappings.md`
+lists the numbers that refer to the same signal on both. Darwin has no signals
+from 32 to 64, which are Linux's real-time signals, so the tools refuse those
+numbers with status 2, as they refuse the names of real-time signals.
+
+`-V` prints `<program> from procps-darwin <version> (procps-ng 4.0.7)`, so the
+output does not claim to be procps-ng.
+
+As in procps-ng, the name that a tool was run as decides its behaviour: `pkill`
+or `lt-pkill` selects `pkill`'s behaviour, and any other name selects `pgrep`'s.
+This project does not implement procps-ng's `pidwait`, which runs under the name
+`pidwait` or `lt-pidwait`. The name is the bytes of `argv[0]` after its last
+`/`. procps-ng's own messages begin with that name, and glibc's getopt messages
+begin with the whole `argv[0]`, both with their bytes unchanged.
+
+Standard output is line-buffered on a terminal and fully buffered otherwise, and
+standard error is unbuffered, as in C. When a write to standard output fails,
+the tool prints `<program>: write error` and exits with status 1, as procps-ng's
+`close_stdout` does. The message ends with a description of the error when the
+final flush fails. It also ends with `Bad file descriptor` when standard input
+and standard output were both closed at start-up. procps-ng's standard output
+descriptor then stays closed, so `fclose` fails, unless a pid file that `-F`
+opened by its path has taken that descriptor. When a write to standard error
+fails, the tool exits with status 1.
+
+Rust's runtime changes two things before `main` runs: it opens `/dev/null` in
+place of a standard stream that is closed, and it ignores `SIGPIPE`. procps-ng
+keeps both as it inherits them. A constructor in `darwin-proc` records them
+first. At start-up, the tools restore the `SIGPIPE` disposition, and a standard
+output or standard error that was closed becomes `/dev/null` opened for reading
+only, so that writes to it fail and `pgrep -h >&-` exits with status 1, as
+procps-ng does. procps-ng's `main` calls `epoll_create` before anything else, so
+its epoll descriptor takes the lowest standard descriptor that was closed, and
+writes to that stream fail with `EINVAL`. The tools fail those writes with
+`EINVAL` too, so `pgrep -h >&-` prints `write error: Invalid argument`, and
+`pgrep -h >&- <&-` prints `write error: Bad file descriptor`. `pgrep -F` gives
+Linux's errors for the path of a descriptor that was closed at start-up, such as
+`/dev/stdin` after `<&-` or `/dev/fd/3` after `3>&-`: `ENXIO` for the epoll
+descriptor, which takes the lowest closed descriptor, and `ENOENT` for a
+descriptor that stays closed. With `SIGPIPE` inherited as ignored, a write to a
+closed pipe fails with `EPIPE`, which the tools do not report, and otherwise
+`SIGPIPE` ends them.
 
 #### 4.2 Matching
 
@@ -869,16 +976,16 @@ this in `docs/mappings.md`.
 
 #### 4.4 Signals
 
-Parse signal names and numbers for Darwin's signal set (which has `SIGINFO` and
-`SIGEMT` and no real-time signals) and send them with `kill(2)`. Report failures
-in procps-ng's format. Just before signalling, read each process's start time
-again and skip a process whose start time has changed, because its pid now
-belongs to another process.
+Send the signal with `kill(2)`. Task 4.1 parses the signal names and numbers for
+Darwin's signal set, which has `SIGINFO` and `SIGEMT` and no real-time signals.
+Report failures in procps-ng's format. Just before signalling, read each
+process's start time again and skip a process whose start time has changed,
+because its pid now belongs to another process.
 
-#### 4.5 Unsupported options
+#### 4.5 Unsupported options (done)
 
 `-m`, `-q`, `--cgroup`, `--ns` and `--nslist` exit with status 2 as described
-under compatibility rules.
+under compatibility rules. Task 4.1 implements the refusal.
 
 #### 4.6 Tests
 

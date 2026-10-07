@@ -1,0 +1,6 @@
+status = 2
+stdout = ""
+stderr = """
+pgrep: Cannot use --quiet and -l,--list-name options together
+Try `pgrep --help' for more information.
+"""

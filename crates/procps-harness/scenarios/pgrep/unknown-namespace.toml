@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "an unknown namespace type in --nslist ends pgrep with status 2 and no message"
+command = ["pgrep", "-s", "0", "--nslist", "bogus", "harness-alpha"]

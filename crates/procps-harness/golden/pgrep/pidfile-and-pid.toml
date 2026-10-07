@@ -1,0 +1,6 @@
+status = 1
+stdout = ""
+stderr = """
+pgrep: Cannot use pidfile and pid option together
+Try `pgrep --help' for more information.
+"""

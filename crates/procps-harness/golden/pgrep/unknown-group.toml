@@ -1,0 +1,5 @@
+status = 2
+stdout = ""
+stderr = """
+pgrep: invalid group name: no-such-group-procps
+"""

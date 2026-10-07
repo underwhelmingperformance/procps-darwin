@@ -4,4 +4,6 @@
 
 //! procps-ng's `pgrep` for macOS.
 
-fn main() {}
+fn main() -> std::process::ExitCode {
+    procps::pgrep::entry("pgrep")
+}
