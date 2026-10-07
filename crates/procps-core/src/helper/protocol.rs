@@ -106,8 +106,9 @@ pub enum Refusal {
     /// The helper did not finish the request within its time limit.
     #[error("the request took longer than the helper's time limit")]
     TimedOut,
-    /// The encoded response is larger than [`Response::LIMIT`].
-    #[error("the response is too large for the protocol")]
+    /// The snapshot's estimated size in memory, or the encoded response, is
+    /// larger than [`Response::LIMIT`].
+    #[error("the snapshot is too large for the helper to send")]
     ResponseTooLarge,
     /// The helper has too many connections open, for all clients or for the
     /// client's user, or the wait for a worker used more than half the

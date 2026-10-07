@@ -256,7 +256,7 @@ creates the Unix stream socket that the plist's `Sockets` entry specifies, at
 `/var/run/procps-helperd.sock`, and the daemon obtains it with
 `launch_activate_socket`. launchd starts the daemon on the first connection, and
 the daemon exits a set time after it starts or after its last connection closes,
-whichever is later.
+whichever is later, but not while a snapshot is running.
 
 - The daemon only reads. It never sends signals: `pkill` calls `kill(2)` as the
   invoking user, so the kernel's permission checks still apply.
@@ -641,7 +641,8 @@ and reads the peer of a connection with `getpeereid` and `LOCAL_PEERPID`. The
 daemon takes its socket from the `Listeners` entry in the `Sockets` dictionary
 of its launchd property list, or, in tests, binds the path that `--socket`
 gives. It exits 60 seconds (the default of `--idle-timeout`) after it starts or
-after its last connection closes, whichever is later.
+after its last connection closes, whichever is later, but not while a snapshot
+is running (task 3.7).
 
 The daemon serves each connection on its own thread and keeps at most 256
 connections open, 64 of them for one user. Like dbus-daemon's
@@ -656,8 +657,8 @@ request whose user has the fewest snapshots running goes next. One user who
 sends many requests therefore delays mostly their own. `Refusal::Busy` goes to a
 connection beyond the connection limits, and to a request that waits for a
 worker beyond its snapshot time limit or gets one with less than half that limit
-left. A snapshot that starts so late would probably finish after the limit, and
-the helper would discard it after keeping the worker from other requests.
+left. A snapshot that starts so late would probably reach the limit, keep the
+worker from other requests until then, and end in `Refusal::TimedOut`.
 
 A client has 1 second to send its request. The helper then has 10 seconds (the
 default of `--time-limit`), including any wait for a worker, to read the process
@@ -665,25 +666,24 @@ data, and the client has another 10 seconds to receive the response. Each read
 and write gets the time that remains as its socket timeout, so a tool that sends
 its request one byte at a time cannot keep the connection open beyond the
 request's 1-second limit. The response has its own time limit so that the helper
-can still refuse a request that used up its time limit. The helper cannot
-interrupt a snapshot, so when a snapshot finishes after its time limit, the
-helper sends `Refusal::TimedOut` instead. A read from the kernel can also block
-forever, and would keep the daemon running. A watchdog therefore stops the
-daemon when a connection runs 30 seconds beyond its time limits, and launchd
-starts a new one for the next connection.
+can still refuse a request that used up its time limit. The helper sends
+`Refusal::TimedOut` when the time limit passes, even while a single read from
+the kernel keeps the snapshot running, as task 3.7 describes. A connection's own
+reads and writes can still get stuck, so a watchdog stops the daemon when a
+connection runs 30 seconds beyond its time limits, and launchd starts a new one
+for the next connection.
 
 The daemon logs JSON to standard error at the level that `PROCPS_DARWIN_LOG`
-sets, or `info`. At `info` and above, it logs its start and stop, each snapshot
-that exceeds its time or size limit, and errors that a client cannot cause. Any
-user can send requests as fast as the daemon answers them, and an event for each
-would let that user fill the disk. Each snapshot that the daemon sends, each
-request that it cannot read or that the client abandons, and each value that it
-cannot read from a process therefore log at `debug`. Any user can start a
-process and then delete its executable, and reading that process's executable
-path then fails. A snapshot that exceeds a limit keeps a worker for seconds,
-which limits how often one user can cause a warning. In task 3.5 the property
-list sets `StandardErrorPath` so that launchd writes the log to a file, and
-newsyslog rotates the file.
+sets, or `info`. At `info` and above, it logs its start and stop, and errors
+that a client cannot cause. Any user can send requests as fast as the daemon
+answers them, and an event for each would let that user fill the disk. Each
+snapshot that the daemon sends, each refusal that a client causes, each request
+that it cannot read or that the client abandons, and each value that it cannot
+read from a process therefore log at `debug`. The daemon logs the cause of a
+`Refusal::Failed` as an error. Any user can start a process and then delete its
+executable, and reading that process's executable path then fails. In task 3.5
+the property list sets `StandardErrorPath` so that launchd writes the log to a
+file, and newsyslog rotates the file.
 
 #### 3.4 Client (done)
 
@@ -747,24 +747,25 @@ any time. The client refuses a path that is not a socket that root owns with one
 link, and the tools then read process data themselves. `docs/helper-security.md`
 describes what such a process can still do.
 
-The helper logs to `/var/log/procps-helperd.log`. The log can record which users
-ran the tools and when: every request at the `debug` level, and requests that
-exceed a limit at the default level. Both installations therefore create it as
-`root:admin` with mode 0640 before launchd starts the helper. launchd would
-otherwise create it with mode 0644. A newsyslog rule in `packaging/newsyslog/`
-rotates the log at 1 MiB and keeps five old logs. The `B` flag stops newsyslog
-from writing a plain-text line into the JSON log.
+The helper logs to `/var/log/procps-helperd.log`. At the `debug` level, which an
+administrator can turn on, the log records every request with the client's user,
+and errors during a connection record the client's user at the default level.
+Both installations therefore create it as `root:admin` with mode 0640 before
+launchd starts the helper. launchd would otherwise create it with mode 0644. A
+newsyslog rule in `packaging/newsyslog/` rotates the log at 1 MiB and keeps five
+old logs. The `B` flag stops newsyslog from writing a plain-text line into the
+JSON log.
 
 The helper receives the log only as its standard error, which launchd opens, so
 the helper cannot reopen the log after a rotation. A helper that tools such as
 `top` keep busy never reaches its idle time. After it has run for an hour, the
-helper therefore exits at the next check that finds no open connection, and
-launchd starts a new helper, with the new log, for the next connection. The
-listener checks when a client connects, before it accepts the connection, and at
-least once a second. A listener that accepted first would always find an open
-connection while clients keep arriving. Compressing a rotated log would delete
-the file that an old helper still writes to, so the rule does not compress
-rotated logs.
+helper therefore exits at the next check that finds no open connection and no
+running snapshot, and launchd starts a new helper, with the new log, for the
+next connection. The listener checks when a client connects, before it accepts
+the connection, and at least once a second. A listener that accepted first would
+always find an open connection while clients keep arriving. Compressing a
+rotated log would delete the file that an old helper still writes to, so the
+rule does not compress rotated logs.
 
 #### 3.6 Threat model (done)
 
@@ -775,30 +776,58 @@ spoofed sockets. Task 3.3 leaves two costs for it to document. A user can keep
 workers busy with requests that walk every process's memory regions, and the
 fair queue limits the delay that this causes other users but not the processor
 time. Each connection keeps its whole snapshot and the encoding in memory until
-it has sent the response, because the response limit applies to the encoding
-after the helper has built it. A user who keeps the helper busy makes it refuse
-other users with `Busy`, and those users' tools then read process data
-themselves. A tool that reads process data itself cannot read other users'
-arguments, because macOS withholds them. What `pgrep -f` and `pkill -f` can
-match for those users therefore changes from one run to the next. A timeout or
-`Busy` does not make a tool stop using the helper, so a helper whose connections
-get stuck costs `top` up to 30 seconds on each refresh.
+it has sent the response. Task 3.7 bounds the snapshot's size. A user who keeps
+the helper busy makes it refuse other users with `Busy`, and those users' tools
+then read process data themselves. A tool that reads process data itself cannot
+read other users' arguments, because macOS withholds them. What `pgrep -f` and
+`pkill -f` can match for those users therefore changes from one run to the next.
+A timeout or `Busy` does not make a tool stop using the helper, so a helper
+whose connections get stuck costs `top` up to 30 seconds on each refresh.
 
-#### 3.7 Bounded snapshots
-
-Make a snapshot stop when its time limit passes or its encoding would exceed
-`Response::LIMIT`. The helper cannot interrupt a snapshot yet, and it checks the
-response's size only after it has built the encoding.
+#### 3.7 Bounded snapshots (done)
 
 Any user controls the cost of every snapshot that includes their processes. A
 process can split its memory into millions of regions, and a walk of its regions
 visits each one. When a request asks for the code and data totals, which every
 user receives, the helper walks the regions of every process that the request
-selects, whoever sent the request. One request can therefore keep a worker for
-longer than the watchdog allows, and the watchdog then stops the helper and
-drops every user's connections. A request can also make the helper keep
-gigabytes in memory. `ProcessSource::snapshot` needs a deadline and a size
-budget for this.
+selects, whoever sent the request. Without a way to stop a snapshot, one request
+could keep a worker for longer than the watchdog allows. The watchdog then stops
+the helper and drops every user's connections. Such a request could also make
+the helper keep gigabytes in memory.
+
+`ProcessSource::snapshot_within` takes a `Budget`: a deadline and a limit on the
+snapshot's estimated size in memory. `LocalSource` checks the budget before and
+after each process, and after each memory region, which it reads through
+`darwin-proc`'s `RegionWalk`. It stops with `SourceError::TimedOut` or
+`SourceError::TooLarge` when the snapshot reaches a limit. `Source` and
+`HelperOrLocal` pass the budget on. `HelperSource` and `FixtureSource` use the
+default implementation, which ignores it. The helper gives each snapshot the
+rest of the request's time limit and `Response::LIMIT` as its budget, and
+refuses the request with `Refusal::TimedOut` or `Refusal::ResponseTooLarge` when
+the snapshot reaches a limit. Each memory region counts as 96 bytes in the
+estimate, about twice its encoded size, so a snapshot with about 2.8 million
+regions is refused although its encoding would fit. The budget applies to an
+estimate, so the helper still checks the encoding's size before it sends the
+response.
+
+The budget cannot interrupt a single read from the kernel. Reading one memory
+region takes time in proportion to the region's size, even when little of it is
+resident, and a review measured 65 seconds for a 64 TiB private file mapping
+with one page touched. The helper therefore takes each snapshot on a thread of
+its own and answers the client with `Refusal::TimedOut` when the time limit
+passes. The thread keeps its worker until the snapshot finishes, so a process
+with such a mapping costs a worker for each request that selects it, for as long
+as the read takes. A helper that exits cannot finish until the read returns, and
+launchd runs only one instance of a job, so no request would be served until
+then. The helper therefore does not exit at its idle time or after an hour while
+a snapshot runs. So a read that never returns keeps the helper running with one
+worker fewer.
+
+Without a budget, a request for the regions of a process with three million
+regions took 9.9 seconds and produced a response of about 132 MiB. With a
+1-second time limit the helper now refuses the request after 1.0 seconds. With
+the default 10-second limit, it refuses the request at the memory limit after
+1.4 seconds.
 
 ### Phase 4: pgrep and pkill
 

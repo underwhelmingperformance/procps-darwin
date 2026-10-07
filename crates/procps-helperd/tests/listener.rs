@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Accepts connections on a listening socket, and stops when the idle time has
-//! passed since the listener started or since its last connection closed.
+//! passed since the listener started or since its last connection closed, but
+//! not while a snapshot is running.
 
 use std::{
     io::Write,
@@ -207,6 +208,58 @@ fn a_listener_past_its_lifetime_leaves_a_new_connection_for_the_next_helper()
     let waiting = socket.accept().map(|_| ()).map_err(|error| error.kind());
 
     assert_eq!(waiting, Ok(()));
+
+    Ok(())
+}
+
+/// A source that takes `delay` to answer, as a slow read from the kernel does.
+struct Slow {
+    delay: Duration,
+}
+
+impl ProcessSource for Slow {
+    fn snapshot(&self, request: &SnapshotRequest) -> Result<Snapshot, SourceError> {
+        thread::sleep(self.delay);
+
+        FixtureSource::new(SystemTime::UNIX_EPOCH, Duration::ZERO, Vec::new()).snapshot(request)
+    }
+}
+
+#[test]
+fn the_listener_waits_for_a_snapshot_that_outlives_its_request()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("socket");
+    let socket = UnixListener::bind(&path)?;
+    let delay = Duration::from_secs(1);
+    let limits = TimeLimits {
+        snapshot: Duration::from_millis(100),
+        ..TimeLimits::default()
+    };
+    let listener = Listener::new(
+        Server::new(Slow { delay }, limits),
+        Duration::from_millis(50),
+        ConnectionLimits::default(),
+    );
+    let started = Instant::now();
+
+    let response = thread::scope(|scope| -> Result<_, Box<dyn std::error::Error>> {
+        let running = scope.spawn(|| listener.run(&socket));
+        let mut client = connect(&path)?;
+        client.write_message(&Request::Snapshot(SnapshotRequest::default()))?;
+        let response = client.read_message::<Response>()?;
+        running
+            .join()
+            .map_err(|_| "the listener thread panicked")??;
+
+        Ok(response)
+    })?;
+
+    // The listener returns only after the snapshot has finished.
+    assert_eq!(
+        (response, started.elapsed() >= delay),
+        (Response::Refused(Refusal::TimedOut), true)
+    );
 
     Ok(())
 }

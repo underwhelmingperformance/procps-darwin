@@ -24,7 +24,7 @@ struct Arguments {
     #[arg(long)]
     socket: Option<PathBuf>,
     /// Stop this many seconds after starting or after the last connection
-    /// closes, whichever is later.
+    /// closes, whichever is later, but not while a snapshot is running.
     #[arg(long, default_value = "60", value_parser = seconds)]
     idle_timeout: Duration,
     /// Give the helper this many seconds, including any wait for a worker, to

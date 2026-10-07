@@ -17,6 +17,7 @@ use procps_core::{
     FieldGroup, SnapshotRequest,
     helper::{ReadMessage, Request, Response, WriteMessage},
 };
+use rstest::rstest;
 
 #[test]
 fn the_helper_serves_a_request_and_stops_when_idle() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,8 +67,13 @@ fn the_helper_serves_a_request_and_stops_when_idle() -> Result<(), Box<dyn std::
     Ok(())
 }
 
-#[test]
-fn a_process_whose_executable_is_gone_is_not_logged() -> Result<(), Box<dyn std::error::Error>> {
+#[rstest]
+#[case::default_level(None, false)]
+#[case::debug_level(Some("debug"), true)]
+fn a_process_whose_executable_is_gone_is_logged_only_at_debug(
+    #[case] level: Option<&str>,
+    #[case] logs_the_failure: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("socket");
     // macOS kills a copy of a platform binary such as `sleep`, so the process
@@ -87,13 +93,19 @@ fn a_process_whose_executable_is_gone_is_not_logged() -> Result<(), Box<dyn std:
         .find(|line| line.as_ref().is_ok_and(|line| line.contains("listening")))
         .ok_or("the copy stopped before it listened")??;
     std::fs::remove_file(&executable)?;
-    let mut helper = Command::new(env!("CARGO_BIN_EXE_procps-helperd"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_procps-helperd"));
+    command
         .arg("--socket")
         .arg(&path)
         .args(["--idle-timeout", "1"])
         .env_remove("PROCPS_DARWIN_LOG")
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+
+    if let Some(level) = level {
+        command.env("PROCPS_DARWIN_LOG", level);
+    }
+
+    let mut helper = command.spawn()?;
     let mut log = BufReader::new(helper.stderr.take().ok_or("no standard error")?).lines();
     log.find(|line| line.as_ref().is_ok_and(|line| line.contains("listening")))
         .ok_or("the helper stopped before it listened")??;
@@ -118,11 +130,21 @@ fn a_process_whose_executable_is_gone_is_not_logged() -> Result<(), Box<dyn std:
     helper.wait()?;
     sleeper.kill()?;
     sleeper.wait()?;
-    let logged_the_failure = rest.iter().any(|line| line.contains("read failed"));
+    let failures: Vec<&String> = rest
+        .iter()
+        .filter(|line| line.contains("read failed"))
+        .collect();
+    // An event that a client causes must include the client's user ID.
+    let every_failure_has_the_client = failures.iter().all(|line| line.contains("\"uid\":"));
 
     assert_eq!(
-        (pids, still_running, logged_the_failure),
-        (vec![pid], true, false),
+        (
+            pids,
+            still_running,
+            !failures.is_empty(),
+            every_failure_has_the_client
+        ),
+        (vec![pid], true, logs_the_failure, true),
         "the helper logged {rest:?}"
     );
 

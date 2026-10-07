@@ -87,3 +87,51 @@ fn an_exited_process_has_no_regions() -> Result<(), Box<dyn std::error::Error>> 
 
     Ok(())
 }
+
+#[test]
+fn a_walk_can_stop_early() -> Result<(), Box<dyn std::error::Error>> {
+    let pid = Pid::current();
+    let walked = pid
+        .region_walk()?
+        .take(2)
+        .map(|region| region.map(|region| (region.address, region.size)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let read: Vec<_> = pid
+        .regions()?
+        .into_iter()
+        .take(2)
+        .map(|region| (region.address, region.size))
+        .collect();
+
+    assert_eq!(walked, read);
+
+    Ok(())
+}
+
+#[test]
+fn a_walk_of_an_exited_process_ends_with_the_error() -> Result<(), Box<dyn std::error::Error>> {
+    let mut child = Command::new("/usr/bin/true").spawn()?;
+    let pid = Pid::from(i32::try_from(child.id())?);
+    child.wait()?;
+
+    let walked: Vec<_> = pid.region_walk()?.collect();
+
+    assert_matches!(walked.as_slice(), [Err(Error::Exited { pid: exited })] if *exited == pid);
+
+    Ok(())
+}
+
+#[test]
+fn a_walk_reads_each_region_when_asked_for_it() -> Result<(), Box<dyn std::error::Error>> {
+    let mut child = Command::new("/bin/sleep").arg("60").spawn()?;
+    let pid = Pid::from(i32::try_from(child.id())?);
+
+    let walk = pid.region_walk()?;
+    child.kill()?;
+    child.wait()?;
+    let walked: Vec<_> = walk.collect();
+
+    assert_matches!(walked.as_slice(), [Err(Error::Exited { pid: exited })] if *exited == pid);
+
+    Ok(())
+}

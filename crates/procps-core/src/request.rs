@@ -26,8 +26,10 @@ pub enum FieldGroup {
     Usage,
     /// Each thread's state, priority and CPU time.
     Threads,
-    /// The memory regions. A walk takes time mostly in proportion to the
-    /// process's resident memory.
+    /// The memory regions. A walk reads each region separately. Reading one
+    /// region can take time in proportion to its size, even when little of it
+    /// is resident, so a walk is slow for a process with many regions or a
+    /// large file mapping.
     Regions,
     /// The open file descriptors.
     FileDescriptors,

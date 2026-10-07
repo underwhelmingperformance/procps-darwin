@@ -5,7 +5,7 @@
 use std::{
     collections::HashMap,
     num::NonZeroUsize,
-    sync::{Condvar, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
     time::Instant,
 };
 
@@ -61,9 +61,14 @@ impl Workers {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether any worker is taking a snapshot.
+    pub(crate) fn running(&self) -> bool {
+        self.state().total > 0
+    }
+
     /// Waits until a worker is free and it is the turn of `uid`'s request, and
     /// returns the worker, or returns `None` when `until` passes first.
-    pub(crate) fn wait(&self, uid: Uid, until: Instant) -> Option<Worker<'_>> {
+    pub(crate) fn wait(self: &Arc<Self>, uid: Uid, until: Instant) -> Option<Worker> {
         let mut state = self.state();
         let ticket = state.next_ticket;
         state.next_ticket += 1;
@@ -82,7 +87,10 @@ impl Workers {
                     self.freed.notify_all();
                 }
 
-                return Some(Worker { workers: self, uid });
+                return Some(Worker {
+                    workers: Arc::clone(self),
+                    uid,
+                });
             }
 
             let remaining = until.saturating_duration_since(Instant::now());
@@ -106,12 +114,12 @@ impl Workers {
 
 /// A worker taken for one snapshot. Dropping it frees the worker.
 #[derive(Debug)]
-pub(crate) struct Worker<'a> {
-    workers: &'a Workers,
+pub(crate) struct Worker {
+    workers: Arc<Workers>,
     uid: Uid,
 }
 
-impl Drop for Worker<'_> {
+impl Drop for Worker {
     fn drop(&mut self) {
         let mut state = self.workers.state();
         state.total -= 1;
@@ -132,6 +140,7 @@ impl Drop for Worker<'_> {
 mod tests {
     use std::{
         num::NonZeroUsize,
+        sync::Arc,
         time::{Duration, Instant},
     };
 
@@ -158,7 +167,7 @@ mod tests {
 
     #[test]
     fn a_request_waits_no_longer_than_its_deadline() {
-        let workers = Workers::new(NonZeroUsize::MIN);
+        let workers = Arc::new(Workers::new(NonZeroUsize::MIN));
         let first = workers.wait(Uid::from(501), Instant::now());
         let second = workers.wait(Uid::from(502), Instant::now() + Duration::from_millis(10));
 
@@ -169,7 +178,7 @@ mod tests {
     fn a_free_worker_goes_to_a_waiting_request_at_once() {
         // Repeat, because a lost wakeup shows up only in some interleavings.
         for _ in 0..10 {
-            let workers = Workers::new(NonZeroUsize::MIN.saturating_add(2));
+            let workers = Arc::new(Workers::new(NonZeroUsize::MIN.saturating_add(2)));
             let far = Instant::now() + Duration::from_secs(5);
             let freed = [
                 workers.wait(Uid::from(9), far),
@@ -211,7 +220,7 @@ mod tests {
 
     #[test]
     fn a_freed_worker_goes_to_the_next_request() {
-        let workers = Workers::new(NonZeroUsize::MIN);
+        let workers = Arc::new(Workers::new(NonZeroUsize::MIN));
         let first = workers.wait(Uid::from(501), Instant::now());
         drop(first);
         let second = workers.wait(Uid::from(502), Instant::now());

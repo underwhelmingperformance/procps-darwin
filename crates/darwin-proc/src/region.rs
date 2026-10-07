@@ -204,7 +204,88 @@ impl Region {
     }
 }
 
+/// A walk of a process's memory regions, in address order. It yields each
+/// region, or the error that ends the walk.
+///
+/// ```
+/// use darwin_proc::Pid;
+///
+/// let first = Pid::current().region_walk()?.next().transpose()?;
+///
+/// assert!(first.is_some());
+/// # Ok::<(), darwin_proc::Error>(())
+/// ```
+#[derive(Debug)]
+pub struct RegionWalk {
+    pid: Pid,
+    page_size: u64,
+    address: u64,
+    finished: bool,
+    span: tracing::Span,
+}
+
+impl Iterator for RegionWalk {
+    type Item = Result<Region, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        let _walking = self.span.enter();
+
+        match pid_info::<ProcRegionInfo>(self.pid, ffi::PROC_PIDREGIONINFO, self.address) {
+            Ok(raw) => {
+                self.address = raw.pri_address.saturating_add(raw.pri_size);
+                Some(Ok(Region::decode(&raw, self.page_size)))
+            }
+            // The kernel returns `EINVAL` when no region starts at or above
+            // `address`, which ends the walk.
+            Err(error) if error.raw_os_error() == Some(libc::EINVAL) => {
+                self.finished = true;
+                None
+            }
+            Err(source) => {
+                self.finished = true;
+                Some(Err(self.pid.live_error(Call::Regions, source)))
+            }
+        }
+    }
+}
+
+impl std::iter::FusedIterator for RegionWalk {}
+
 impl Pid {
+    /// Starts a walk of the process's virtual memory regions. A caller that
+    /// must bound the time or memory that the walk uses can stop it early.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    ///
+    /// assert_eq!(Pid::current().region_walk()?.take(2).count(), 2);
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Os`] if the `hw.pagesize` sysctl fails. The walk
+    /// yields the other errors that [`Pid::regions`] returns.
+    #[tracing::instrument(level = "debug", err(level = "debug"))]
+    pub fn region_walk(self) -> Result<RegionWalk, Error> {
+        let page_size = page_size().map_err(|source| Error::Os {
+            call: Call::Regions,
+            source,
+        })?;
+
+        Ok(RegionWalk {
+            pid: self,
+            page_size,
+            address: 0,
+            finished: false,
+            span: tracing::debug_span!("region walk", pid = %self),
+        })
+    }
+
     /// Reads every region of the process's virtual memory, in address order.
     ///
     /// ```
@@ -222,27 +303,7 @@ impl Pid {
     /// fails for another reason or the `hw.pagesize` sysctl fails.
     #[tracing::instrument(level = "debug", err(level = "debug"))]
     pub fn regions(self) -> Result<Vec<Region>, Error> {
-        let page_size = page_size().map_err(|source| Error::Os {
-            call: Call::Regions,
-            source,
-        })?;
-        let mut regions = Vec::new();
-        let mut address = 0;
-
-        loop {
-            match pid_info::<ProcRegionInfo>(self, ffi::PROC_PIDREGIONINFO, address) {
-                Ok(raw) => {
-                    address = raw.pri_address.saturating_add(raw.pri_size);
-                    regions.push(Region::decode(&raw, page_size));
-                }
-                // The kernel returns `EINVAL` when no region starts at or
-                // above `address`, which ends the walk.
-                Err(error) if error.raw_os_error() == Some(libc::EINVAL) => {
-                    return Ok(regions);
-                }
-                Err(source) => return Err(self.live_error(Call::Regions, source)),
-            }
-        }
+        self.region_walk()?.collect()
     }
 }
 

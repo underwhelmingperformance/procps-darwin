@@ -9,14 +9,15 @@ use std::{
     os::unix::process::CommandExt,
     path::PathBuf,
     process::{Command, Stdio},
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
+use assert_matches::assert_matches;
 use darwin_proc::{Pid, ProcessInfo};
 use pretty_assertions::assert_eq;
 use procps_core::{
-    Field, FieldGroup, FixtureSource, LocalSource, Process, ProcessSource, RegionTotals, Snapshot,
-    SnapshotRequest, Usage,
+    Budget, Field, FieldGroup, FixtureSource, HelperOrLocal, LocalSource, Process, ProcessSource,
+    RegionTotals, Snapshot, SnapshotRequest, Source, SourceError, Usage, helper::HelperSource,
 };
 use rstest::rstest;
 
@@ -448,4 +449,69 @@ fn a_fixture_reports_a_requested_group_that_it_lacks_as_unsupported()
     );
 
     Ok(())
+}
+
+/// What a budget allows a snapshot.
+#[derive(Clone, Copy, Debug)]
+enum Allowance {
+    Unlimited,
+    /// A deadline that has already passed.
+    NoTime,
+    OneByte,
+}
+
+/// How a snapshot within a budget ended.
+#[derive(Debug, PartialEq)]
+enum Ending {
+    Taken(Vec<Pid>),
+    TimedOut,
+    TooLarge(usize),
+}
+
+#[rstest]
+#[case::unlimited(Allowance::Unlimited, Ending::Taken(vec![Pid::current()]))]
+#[case::no_time(Allowance::NoTime, Ending::TimedOut)]
+#[case::one_byte(Allowance::OneByte, Ending::TooLarge(1))]
+fn a_snapshot_stays_within_its_budget(
+    #[case] allowance: Allowance,
+    #[case] expected: Ending,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let budget = match allowance {
+        Allowance::Unlimited => Budget::UNLIMITED,
+        Allowance::NoTime => Budget::UNLIMITED.until(Instant::now()),
+        Allowance::OneByte => Budget::UNLIMITED.bytes(1),
+    };
+
+    let ending = match LocalSource.snapshot_within(&everything_for([Pid::current()]), budget) {
+        Ok(snapshot) => Ending::Taken(
+            snapshot
+                .processes
+                .iter()
+                .map(|process| process.info.pid)
+                .collect(),
+        ),
+        Err(SourceError::TimedOut) => Ending::TimedOut,
+        Err(SourceError::TooLarge { limit }) => Ending::TooLarge(limit),
+        Err(error) => return Err(error.into()),
+    };
+
+    assert_eq!(ending, expected);
+
+    Ok(())
+}
+
+#[rstest]
+#[case::local(Source::Local(LocalSource))]
+#[case::helper_or_local(Source::HelperOrLocal(HelperOrLocal::new(HelperSource::new(
+    "/nonexistent/helper.sock"
+))))]
+fn a_source_that_reads_locally_applies_the_budget(#[case] source: Source) {
+    let result = source
+        .snapshot_within(
+            &everything_for([Pid::current()]),
+            Budget::UNLIMITED.bytes(1),
+        )
+        .map(|snapshot| snapshot.processes.len());
+
+    assert_matches!(result, Err(SourceError::TooLarge { limit: 1 }));
 }

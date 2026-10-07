@@ -193,6 +193,49 @@ impl Process {
             ..self
         }
     }
+
+    /// An estimate of the memory that this process's values use. It leaves out
+    /// the memory regions, which the source counts as it reads them.
+    pub(crate) fn estimated_size(&self) -> usize {
+        /// The memory that `strings` use.
+        fn strings(strings: Option<&Field<Vec<OsString>>>) -> usize {
+            strings.and_then(Field::available).map_or(0, |strings| {
+                strings
+                    .iter()
+                    .map(|string| size_of::<OsString>() + string.len())
+                    .sum()
+            })
+        }
+
+        /// The memory that the items of `list` use.
+        fn list<T>(list: Option<&Field<Vec<T>>>) -> usize {
+            list.and_then(Field::available)
+                .map_or(0, |list| list.len() * size_of::<T>())
+        }
+
+        let path = |path: Option<&Field<PathBuf>>| {
+            path.and_then(Field::available)
+                .map_or(0, |path| path.as_os_str().len())
+        };
+
+        let thread_names = self
+            .threads
+            .as_ref()
+            .and_then(Field::available)
+            .map_or(0, |threads| {
+                threads.iter().map(|thread| thread.name.len()).sum()
+            });
+
+        size_of::<Self>()
+            + self.info.comm.len()
+            + path(Some(&self.executable))
+            + strings(self.arguments.as_ref())
+            + strings(self.environment.as_ref())
+            + list(self.threads.as_ref())
+            + thread_names
+            + list(self.file_descriptors.as_ref())
+            + path(self.working_directory.as_ref())
+    }
 }
 
 /// The totals of a process's memory regions. procps-ng's `trs`, `drs` and
