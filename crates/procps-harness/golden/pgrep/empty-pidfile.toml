@@ -1,0 +1,6 @@
+status = 1
+stdout = ""
+stderr = """
+pgrep: pidfile not valid
+Try `pgrep --help' for more information.
+"""

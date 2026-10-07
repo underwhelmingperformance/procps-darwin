@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "with POSIXLY_CORRECT set, pgrep reads an option after the pattern as a second pattern"
+command = ["pgrep", "-s", "0", "harness-alpha", "-l"]
+
+[environment]
+POSIXLY_CORRECT = "1"

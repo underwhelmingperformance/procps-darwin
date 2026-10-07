@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "-h after an option for a Linux concept prints the usage text"
+command = ["pkill", "-q", "1", "-h"]

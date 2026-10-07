@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "-v with -n prints the usage text, with status 2"
+command = ["pgrep", "-s", "0", "-v", "-n", "harness-alpha"]

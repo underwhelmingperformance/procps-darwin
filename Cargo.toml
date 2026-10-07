@@ -41,6 +41,7 @@ thiserror = "2.0.21"
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+  "ansi",
   "env-filter",
   "fmt",
   "json",

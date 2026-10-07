@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--quiet with -a prints an error and a hint to use --help, with status 2"
+command = ["pgrep", "-s", "0", "--quiet", "-a", "harness-alpha"]

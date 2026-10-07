@@ -1,0 +1,6 @@
+status = 2
+stdout = ""
+stderr = """
+pgrep: -L without -F makes no sense
+Try `pgrep --help' for more information.
+"""

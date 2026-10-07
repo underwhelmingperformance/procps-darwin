@@ -53,6 +53,11 @@ exporter.
   which sets `SPDX-FileCopyrightText = "NONE"` and CC0-1.0, and never annotate
   them with our copyright.
 
+- A golden file that contains the usage text of procps-ng's `pgrep` or `pkill`
+  has procps-ng's copyright holders and GPL-2.0-or-later, because the text comes
+  from procps-ng's source. List it in the procps-ng entry of `REUSE.toml`. The
+  `reuse` test in `procps-harness` fails when that list differs from the golden
+  files that contain the usage text.
 - procps-ng is GPL-2.0-or-later, so its code can be translated into this
   project. Check each file's licence header first: GPL-2.0-only code cannot be
   ported.
@@ -82,8 +87,10 @@ exporter.
 ## Rust style
 
 - `lib.rs`, `mod.rs` and other re-export files contain only module declarations
-  and re-exports. `main.rs` sets up observability, parses arguments and
-  dispatches. The program logic is in modules.
+  and re-exports. A binary's `main` sets up observability, parses arguments and
+  dispatches. When several binaries share that work, each `main` calls one
+  library function: `pgrep` and `pkill` both call `procps::pgrep::entry`. The
+  program logic is in modules.
 - Clippy is strict, configured in `[workspace.lints]`. Fix what a lint reports.
   Where a lint does not apply, use `#[expect(lint, reason = "...")]`, which
   warns once the code stops triggering the lint. Clippy rejects `#[allow]`.
@@ -101,25 +108,32 @@ exporter.
 
 - Use `thiserror` in every crate, including the binaries, with `#[from]` for
   conversions.
-- Each binary has a top-level error enum, and its variants decide the exit
-  status. The statuses follow procps-ng: for `pgrep` and `pkill`, a syntax error
-  exits with 2 and a fatal error with 3.
+- Each binary, or each set of binaries that share an entry function, has a
+  top-level error enum, and its variants decide the exit status. The statuses
+  follow procps-ng: for `pgrep` and `pkill`, a syntax error exits with 2 and a
+  fatal error with 3.
 - `darwin-proc` errors distinguish a process that has exited, a denied read and
   an unsupported call, because the tools show each case differently.
 
 ## Command-line parsing
 
-- `pgrep`, `pkill` and `procps-helperd` use `clap` with derive and parse
-  straight into typed values. procps-ng parses `pgrep` and `pkill` with
-  `getopt_long`, and `clap` accepts the same forms: clustered short options,
-  attached values, abbreviated long options (`infer_long_args`) and options
-  after the pattern.
+- `pgrep`, `pkill` and `procps-helperd` use `clap`. `procps-helperd` uses
+  `clap`'s derive and parses straight into typed values. procps-ng parses
+  `pgrep` and `pkill` with `getopt_long`, and `clap` accepts the same forms:
+  clustered short options, attached values, abbreviated long options
+  (`infer_long_args`) and options after the pattern. `pgrep` and `pkill` build
+  their `clap` command from one table of options, in the order of procps-ng's
+  `longopts`. The same table gives each tool its own short options and drives a
+  scanner that reproduces glibc's messages. After `clap` has parsed the command
+  line, the parser replays the options in command-line order. The replay needs
+  the positions of the occurrences, which `clap`'s derive API does not give.
 - Before `clap` runs, `pkill` removes the first argument of the form `-<signal>`
   and uses it as the signal, wherever that argument appears. This matches
   procps-ng's `signal_option`. uutils/procps rewrites every such argument, so
   change that part when reusing its code.
-- Render `clap` errors and help output in procps-ng's format: glibc's `getopt`
-  messages, then procps-ng's usage text, with exit status 2.
+- Render `clap` errors in procps-ng's format: glibc's `getopt` message, then
+  procps-ng's usage text, with exit status 2. The help output is procps-ng's
+  usage text, with exit status 0.
 - `ps` and `top` use parsers ported from procps-ng, because `ps` mixes UNIX, BSD
   and GNU syntax (`ps aux`, `ps -ef`, `ps opid,cmd`). The ported parsers produce
   typed option structs. From uutils/procps `ps`, reuse the format-specifier

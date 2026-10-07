@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "pkill reads -info as -i -n -f -o, and -n with -o prints the usage text, with status 2"
+command = ["pkill", "-s", "0", "-info", "harness-alpha"]

@@ -239,6 +239,23 @@ impl Output {
         }
     }
 
+    /// Records that the tool opened a pid file from a path. procps-ng keeps
+    /// the file open on the lowest free descriptor. When standard input and
+    /// standard output were both closed at start-up, that descriptor is
+    /// standard output's, so `fclose(stdout)` closes the pid file and
+    /// succeeds.
+    ///
+    /// ```
+    /// let mut output = procps::output::Output::new();
+    ///
+    /// output.open_pid_file();
+    ///
+    /// assert!(output.close().is_ok());
+    /// ```
+    pub fn open_pid_file(&mut self) {
+        self.stdout.close_error = None;
+    }
+
     /// Standard output and standard error.
     ///
     /// ```

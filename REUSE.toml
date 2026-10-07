@@ -13,3 +13,51 @@ path = [
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
+
+# These golden files contain the usage text of procps-ng's pgrep and pkill. The
+# text is from procps-ng's src/pgrep.c, so the files have its copyright holders
+# and licence. The procps-harness test in tests/reuse.rs checks that this list
+# contains exactly the golden files with the usage text.
+[[annotations]]
+path = [
+  "crates/procps-harness/golden/pgrep/abbreviated-option-with-unwanted-argument.toml",
+  "crates/procps-harness/golden/pgrep/ambiguous-long-option-with-value.toml",
+  "crates/procps-harness/golden/pgrep/ambiguous-long-option.toml",
+  "crates/procps-harness/golden/pgrep/cgroup-comma-list.toml",
+  "crates/procps-harness/golden/pgrep/clustered-option-without-argument.toml",
+  "crates/procps-harness/golden/pgrep/colon-option.toml",
+  "crates/procps-harness/golden/pgrep/comma-list.toml",
+  "crates/procps-harness/golden/pgrep/empty-list.toml",
+  "crates/procps-harness/golden/pgrep/empty-long-option.toml",
+  "crates/procps-harness/golden/pgrep/empty-user-list.toml",
+  "crates/procps-harness/golden/pgrep/help-before-invalid-option.toml",
+  "crates/procps-harness/golden/pgrep/help-short.toml",
+  "crates/procps-harness/golden/pgrep/help.toml",
+  "crates/procps-harness/golden/pgrep/invalid-option.toml",
+  "crates/procps-harness/golden/pgrep/inverse-and-newest.toml",
+  "crates/procps-harness/golden/pgrep/long-option-with-unwanted-argument.toml",
+  "crates/procps-harness/golden/pgrep/long-option-without-argument.toml",
+  "crates/procps-harness/golden/pgrep/newest-and-oldest.toml",
+  "crates/procps-harness/golden/pgrep/pkill-only-option.toml",
+  "crates/procps-harness/golden/pgrep/question-mark.toml",
+  "crates/procps-harness/golden/pgrep/repeated-ignore-case-before-invalid-option.toml",
+  "crates/procps-harness/golden/pgrep/repeated-ignore-case.toml",
+  "crates/procps-harness/golden/pgrep/short-option-without-argument.toml",
+  "crates/procps-harness/golden/pgrep/unrecognized-long-option.toml",
+  "crates/procps-harness/golden/pkill/help-after-unsupported-option.toml",
+  "crates/procps-harness/golden/pkill/help.toml",
+  "crates/procps-harness/golden/pkill/info-as-options.toml",
+  "crates/procps-harness/golden/pkill/pgrep-only-option.toml",
+  "crates/procps-harness/golden/pkill/real-time-signal-out-of-range.toml",
+  "crates/procps-harness/golden/pkill/signal-option-before-signal-value.toml",
+  "crates/procps-harness/golden/pkill/unknown-signal.toml",
+]
+SPDX-FileCopyrightText = [
+  "2009-2026 Craig Small <csmall@dropbear.xyz>",
+  "2013-2023 Jim Warner <james.warner@comcast.net>",
+  "2011-2012 Sami Kerola <kerolasa@iki.fi>",
+  "2012 Roberto Polli <rpolli@babel.it>",
+  "2002-2007 Albert Cahalan",
+  "2000 Kjetil Torgrim Homme <kjetilho@ifi.uio.no>",
+]
+SPDX-License-Identifier = "GPL-2.0-or-later"

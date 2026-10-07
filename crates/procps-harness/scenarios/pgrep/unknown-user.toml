@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "an unknown user name prints an error, with status 2"
+command = ["pgrep", "-s", "0", "-u", "no-such-user-procps", "harness-alpha"]

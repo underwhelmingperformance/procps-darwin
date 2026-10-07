@@ -1,0 +1,6 @@
+status = 2
+stdout = ""
+stderr = """
+pgrep: no matching criteria specified
+Try `pgrep --help' for more information.
+"""

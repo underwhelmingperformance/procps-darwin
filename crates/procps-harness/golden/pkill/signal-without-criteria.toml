@@ -1,0 +1,6 @@
+status = 2
+stdout = ""
+stderr = """
+pkill: no matching criteria specified
+Try `pkill --help' for more information.
+"""

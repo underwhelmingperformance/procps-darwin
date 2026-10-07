@@ -1,0 +1,5 @@
+status = 1
+stdout = ""
+stderr = """
+pgrep: Unable to open pidfile: No such file or directory
+"""
