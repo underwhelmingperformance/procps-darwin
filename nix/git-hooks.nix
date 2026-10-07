@@ -41,15 +41,26 @@
           entry = "nix fmt";
           language = "system";
           require_serial = true;
-          before = ["flake-check"];
+          before = ["workspace-clippy"];
+        };
+
+        workspace-clippy = {
+          enable = true;
+          name = "clippy";
+          entry = "${pkgs.bash}/bin/bash -c 'if [ \"$PROCPS_DARWIN_DEV_SHELL\" = \"$(${lib.getExe config.procps-darwin.devShellDigest})\" ]; then just clippy; else nix develop --command just clippy; fi'";
+          language = "system";
+          pass_filenames = false;
+          always_run = true;
         };
 
         flake-check = {
           enable = true;
           name = "nix flake check";
-          entry = "nix flake check";
+          entry = "${pkgs.bash}/bin/bash -c 'nix flake check \"git+file://$(git rev-parse --show-toplevel)?rev=\${PRE_COMMIT_TO_REF:-$(git rev-parse \"\${PRE_COMMIT_LOCAL_BRANCH:-HEAD}\")}\"'";
           language = "system";
           pass_filenames = false;
+          always_run = true;
+          stages = ["pre-push"];
         };
       };
     };

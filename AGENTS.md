@@ -188,5 +188,12 @@ exporter.
   database pinned in `flake.lock`. Renovate's weekly lock-file maintenance is
   configured to update it, and `nix flake update advisory-db` updates it by
   hand. `just audit` reads the live database. CI runs `nix flake check`.
+- The `pre-commit` hook formats the changed files and runs clippy on every
+  commit. The `pre-push` hook runs `nix flake check` once for each push, on the
+  first ref that the push does not delete, which can be a branch or a tag. A ref
+  whose previous commit the local repository lacks, such as a new branch, counts
+  only if it has commits that no remote-tracking branch of that remote contains.
+  CI checks each pull request and `main`. The tests are not part of the
+  `pre-commit` hook, so run `just test` before each commit.
 - Commit messages use Conventional Commits, with bodies wrapped at 72 columns.
   The `commit-msg` hook checks them with wrapscallion.
