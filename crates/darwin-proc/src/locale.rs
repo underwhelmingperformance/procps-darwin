@@ -978,12 +978,73 @@ fn normalise_codeset(codeset: &str) -> String {
     normalised
 }
 
+/// The character that each byte encodes on its own in the character encoding
+/// `codeset`, decoded with `iconv`, or `None` for a byte that encodes no
+/// character on its own. Returns `None` if `iconv` does not know `codeset`.
+///
+/// ```
+/// let decoded = darwin_proc::decode_each_byte(c"ISO8859-1").expect("iconv knows ISO 8859-1");
+///
+/// assert_eq!((decoded[0x41], decoded[0xe9]), (Some('A'), Some('é')));
+/// ```
+#[must_use]
+pub fn decode_each_byte(codeset: &CStr) -> Option<[Option<char>; 256]> {
+    // SAFETY: both arguments are NUL-terminated strings that outlive the call.
+    let descriptor = unsafe { ffi::iconv_open(c"UTF-32LE".as_ptr(), codeset.as_ptr()) };
+
+    if descriptor.addr() == usize::MAX {
+        return None;
+    }
+
+    let mut decoded = [None; 256];
+
+    for (byte, slot) in (0..=u8::MAX).zip(&mut decoded) {
+        let mut input = [byte];
+        let mut output = [0_u8; 4];
+        let mut input_pointer = input.as_mut_ptr().cast::<libc::c_char>();
+        let mut input_left = input.len();
+        let mut output_pointer = output.as_mut_ptr().cast::<libc::c_char>();
+        let mut output_left = output.len();
+
+        // SAFETY: `descriptor` is open. Null pointers reset its shift state.
+        // The other pointers refer to `input` and `output`, and the counts are
+        // their lengths.
+        let result = unsafe {
+            ffi::iconv(
+                descriptor,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            ffi::iconv(
+                descriptor,
+                &raw mut input_pointer,
+                &raw mut input_left,
+                &raw mut output_pointer,
+                &raw mut output_left,
+            )
+        };
+
+        if result != usize::MAX && input_left == 0 && output_left == 0 {
+            *slot = char::from_u32(u32::from_le_bytes(output));
+        }
+    }
+
+    // SAFETY: `descriptor` is open, and nothing uses it after this call.
+    unsafe { ffi::iconv_close(descriptor) };
+
+    Some(decoded)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::ffi::CStr;
+
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    use super::{CaseFolding, LocaleName, darwin_locale, normalise_codeset};
+    use super::{CaseFolding, LocaleName, darwin_locale, decode_each_byte, normalise_codeset};
 
     #[rstest]
     #[case::linux("utf8", "utf8")]
@@ -1036,6 +1097,27 @@ mod tests {
     #[case::darwin_spelling_of_an_alias("no_NO.ISO8859-1", None)]
     fn a_glibc_locale_has_a_darwin_locale(#[case] name: &str, #[case] expected: Option<&str>) {
         assert_eq!(darwin_locale(name).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::letter(c"ISO8859-1", 0xe9, Some('é'))]
+    #[case::control(c"ISO8859-1", 0x85, Some('\u{85}'))]
+    #[case::unassigned(c"ISO8859-3", 0xa5, None)]
+    #[case::cyrillic(c"KOI8-R", 0xc1, Some('а'))]
+    #[case::ascii(c"US-ASCII", 0xe9, None)]
+    fn each_byte_is_decoded_on_its_own(
+        #[case] codeset: &CStr,
+        #[case] byte: u8,
+        #[case] expected: Option<char>,
+    ) {
+        let decoded = decode_each_byte(codeset).expect("iconv knows the codeset");
+
+        assert_eq!(decoded[usize::from(byte)], expected);
+    }
+
+    #[test]
+    fn an_unknown_codeset_is_not_decoded() {
+        assert_eq!(decode_each_byte(c"NO-SUCH-CODESET"), None);
     }
 
     // glibc 2.44's `strcasecmp` gives these results in `tr_TR.ISO-8859-9`.
