@@ -25,6 +25,7 @@ pretty_assertions.workspace = true
 procps-core = { workspace = true, features = ["testing"] }
 procps-harness.workspace = true
 rstest.workspace = true
+rustix = { workspace = true, features = ["pty"] }
 tempfile.workspace = true
 
 # The reference test has its own `main`, so that its binary can also run as the
