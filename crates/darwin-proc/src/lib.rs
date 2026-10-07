@@ -34,7 +34,7 @@ pub use arguments::{Arguments, MalformedArguments};
 pub use error::{Call, Error};
 pub use info::{AccountingFlags, Credentials, ProcessFlags, ProcessInfo, Status, Terminal};
 pub use pid::Pid;
-pub use region::{Protection, Region, ShareMode};
+pub use region::{Protection, Region, RegionWalk, ShareMode};
 pub use resource::{ResourceCounters, ResourceUsage};
 pub use signal_set::SignalSet;
 pub use socket::{LaunchdSockets, Peer, PeerCredentials};

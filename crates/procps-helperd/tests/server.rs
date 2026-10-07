@@ -10,18 +10,20 @@ use std::{
     io::{self, Write},
     num::NonZeroUsize,
     os::unix::net::UnixStream,
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use assert_matches::assert_matches;
 use darwin_proc::{Pid, Uid};
 use pretty_assertions::assert_eq;
 use procps_core::{
-    Field, FieldGroup, FixtureSource, Process, ProcessSource, Snapshot, SnapshotRequest,
+    Budget, Field, FieldGroup, FixtureSource, Process, ProcessSource, Snapshot, SnapshotRequest,
     SourceError,
-    helper::{ProtocolError, ReadMessage, Refusal, Request, Response, VERSION, WriteMessage},
+    helper::{
+        Message, ProtocolError, ReadMessage, Refusal, Request, Response, VERSION, WriteMessage,
+    },
 };
 use procps_helperd::{ServeError, Server, TimeLimits};
 use rstest::rstest;
@@ -46,7 +48,7 @@ fn empty() -> FixtureSource {
 }
 
 /// Sends `request` to `server` over a socket pair and returns the response.
-fn exchange<S: ProcessSource + Sync>(
+fn exchange<S: ProcessSource + Send + Sync + 'static>(
     server: &Server<S>,
     request: &[u8],
 ) -> Result<Response, Box<dyn std::error::Error>> {
@@ -177,6 +179,107 @@ fn a_snapshot_that_fails_is_refused(
     assert_eq!(
         exchange(&server, &frame(&request)?)?,
         Response::Refused(refusal)
+    );
+
+    Ok(())
+}
+
+/// The limit of a budget that a source reaches.
+#[derive(Clone, Copy, Debug)]
+enum Limit {
+    Time,
+    Memory,
+}
+
+/// A source that reaches `limit` of the budget that it receives, and records
+/// whether the budget limits the snapshot to `Response::LIMIT` bytes and has a
+/// deadline.
+struct OverBudget {
+    limit: Limit,
+    limited: Arc<Mutex<Option<bool>>>,
+}
+
+impl ProcessSource for OverBudget {
+    fn snapshot(&self, request: &SnapshotRequest) -> Result<Snapshot, SourceError> {
+        empty().snapshot(request)
+    }
+
+    fn snapshot_within(
+        &self,
+        request: &SnapshotRequest,
+        budget: Budget,
+    ) -> Result<Snapshot, SourceError> {
+        // The second reading in `Caller::redact` asks for selected processes.
+        if request.selected().is_some() {
+            return empty().snapshot(request);
+        }
+
+        let response_limit = usize::try_from(Response::LIMIT).unwrap_or(usize::MAX);
+
+        if let Ok(mut limited) = self.limited.lock() {
+            *limited = Some(
+                budget == budget.bytes(response_limit)
+                    && budget != Budget::UNLIMITED.bytes(response_limit),
+            );
+        }
+
+        Err(match self.limit {
+            Limit::Time => SourceError::TimedOut,
+            Limit::Memory => SourceError::TooLarge { limit: 1 },
+        })
+    }
+}
+
+#[rstest]
+#[case::time(Limit::Time, Refusal::TimedOut)]
+#[case::memory(Limit::Memory, Refusal::ResponseTooLarge)]
+fn a_snapshot_over_its_budget_is_refused(
+    #[case] limit: Limit,
+    #[case] refusal: Refusal,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let limited = Arc::new(Mutex::new(None));
+    let source = OverBudget {
+        limit,
+        limited: Arc::clone(&limited),
+    };
+    let server = Server::new(source, TimeLimits::default());
+    let request = Request::Snapshot(SnapshotRequest::default());
+
+    let response = exchange(&server, &frame(&request)?)?;
+    let limited = *limited.lock().map_err(|_| "the lock is poisoned")?;
+
+    assert_eq!(
+        (response, limited),
+        (Response::Refused(refusal), Some(true))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_snapshot_that_blocks_is_refused_at_its_deadline_and_keeps_its_worker()
+-> Result<(), Box<dyn std::error::Error>> {
+    // A single read from the kernel can block for longer than any time limit,
+    // and the source cannot stop it.
+    let source = Troubled {
+        delay: Duration::from_secs(2),
+        broken: false,
+    };
+    let server = Server::new(source, limits(50)).with_workers(NonZeroUsize::MIN);
+    let request = frame(&Request::Snapshot(SnapshotRequest::default()))?;
+    let started = Instant::now();
+
+    let first = exchange(&server, &request)?;
+    let answered_in_time = started.elapsed() < Duration::from_secs(1);
+    let second = exchange(&server, &request)?;
+
+    assert_eq!(
+        (first, answered_in_time, second),
+        (
+            Response::Refused(Refusal::TimedOut),
+            true,
+            Response::Refused(Refusal::Busy)
+        )
     );
 
     Ok(())

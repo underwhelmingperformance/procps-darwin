@@ -11,7 +11,7 @@ use std::{
 use darwin_proc::Uid;
 
 use crate::{
-    ErrorChain, LocalSource, ProcessSource, Snapshot, SnapshotRequest, SourceError,
+    Budget, ErrorChain, LocalSource, ProcessSource, Snapshot, SnapshotRequest, SourceError,
     helper::{HelperSource, SOCKET},
 };
 
@@ -44,10 +44,18 @@ pub enum Source {
 
 impl ProcessSource for Source {
     fn snapshot(&self, request: &SnapshotRequest) -> Result<Snapshot, SourceError> {
+        self.snapshot_within(request, Budget::UNLIMITED)
+    }
+
+    fn snapshot_within(
+        &self,
+        request: &SnapshotRequest,
+        budget: Budget,
+    ) -> Result<Snapshot, SourceError> {
         match self {
-            Self::Local(source) => source.snapshot(request),
-            Self::Helper(source) => source.snapshot(request),
-            Self::HelperOrLocal(source) => source.snapshot(request),
+            Self::Local(source) => source.snapshot_within(request, budget),
+            Self::Helper(source) => source.snapshot_within(request, budget),
+            Self::HelperOrLocal(source) => source.snapshot_within(request, budget),
         }
     }
 }
@@ -130,25 +138,33 @@ impl HelperOrLocal {
 
 impl ProcessSource for HelperOrLocal {
     fn snapshot(&self, request: &SnapshotRequest) -> Result<Snapshot, SourceError> {
+        self.snapshot_within(request, Budget::UNLIMITED)
+    }
+
+    fn snapshot_within(
+        &self,
+        request: &SnapshotRequest,
+        budget: Budget,
+    ) -> Result<Snapshot, SourceError> {
         if !self.uses_helper() {
-            return LocalSource.snapshot(request);
+            return LocalSource.snapshot_within(request, budget);
         }
 
-        match self.helper.snapshot(request) {
+        match self.helper.snapshot_within(request, budget) {
             Err(SourceError::Helper(error)) if error.is_persistent() => {
                 tracing::warn!(
                     error = %ErrorChain(&error),
                     "the helper failed, so reading process data in the tool itself from now on"
                 );
                 self.abandoned.store(true, Ordering::Relaxed);
-                LocalSource.snapshot(request)
+                LocalSource.snapshot_within(request, budget)
             }
             Err(error) => {
                 tracing::debug!(
                     error = %ErrorChain(&error),
                     "the helper failed, so reading process data in the tool itself"
                 );
-                LocalSource.snapshot(request)
+                LocalSource.snapshot_within(request, budget)
             }
             result => result,
         }

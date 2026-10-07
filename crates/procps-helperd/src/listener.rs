@@ -33,7 +33,8 @@ const MINIMUM_WAIT: Duration = Duration::from_millis(10);
 const WATCHDOG_GRACE: Duration = Duration::from_secs(30);
 
 /// How long the listener runs before it returns at the next check that finds
-/// no open connection, unless [`Listener::lifetime`] replaces it.
+/// no open connection and no running snapshot, unless [`Listener::lifetime`]
+/// replaces it.
 const LIFETIME: Duration = Duration::from_hours(1);
 
 /// How long the listener waits after a failed `accept`, such as when the
@@ -91,18 +92,19 @@ impl Default for ConnectionLimits {
 
 /// Accepts connections and serves each one on its own thread. It returns when
 /// the idle time has passed since it started or since its last connection
-/// closed, whichever is later.
+/// closed, whichever is later, and no snapshot is running.
 ///
 /// launchd starts the helper again when the next connection arrives, so the
 /// helper does not need to keep running between uses.
 ///
 /// After it has run for its lifetime, the listener also returns at the next
-/// check that finds no open connection, even if it never stays idle for its
-/// idle time. It checks when a client connects, before it accepts the
-/// connection, and at least once a second. A connection that arrives as the
-/// listener returns waits in the socket for launchd to start the next helper.
-/// launchd opens the helper's log when it starts the helper, so the next helper
-/// writes to the new log that newsyslog created when it rotated the old one.
+/// check that finds no open connection and no running snapshot, even if it
+/// never stays idle for its idle time. It checks when a client connects, before
+/// it accepts the connection, and at least once a second. A connection that
+/// arrives as the listener returns waits in the socket for launchd to start the
+/// next helper. launchd opens the helper's log when it starts the helper, so
+/// the next helper writes to the new log that newsyslog created when it rotated
+/// the old one.
 ///
 /// ```
 /// use std::time::{Duration, SystemTime};
@@ -139,8 +141,9 @@ pub enum ListenError {
 
 impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
     /// A listener that serves connections with `server`, returns when `idle`
-    /// has passed since it started or since its last connection closed, and
-    /// keeps at most `connections` open at once.
+    /// has passed since it started or since its last connection closed, but
+    /// not while a snapshot is running, and keeps at most `connections` open at
+    /// once.
     ///
     /// ```
     /// use std::time::Duration;
@@ -186,7 +189,8 @@ impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
     }
 
     /// This listener, which returns after it has run for `lifetime`, at the
-    /// next check that finds no open connection. The default is an hour.
+    /// next check that finds no open connection and no running snapshot. The
+    /// default is an hour.
     ///
     /// ```
     /// use std::time::Duration;
@@ -206,8 +210,9 @@ impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
 
     /// Serves the connections on `socket`, and returns when the idle time has
     /// passed since it started or since its last connection closed, whichever
-    /// is later. After it has run for its lifetime, it also returns at the next
-    /// check that finds no open connection.
+    /// is later, and no snapshot is running. After it has run for its
+    /// lifetime, it also returns at the next check that finds no open
+    /// connection and no running snapshot.
     ///
     /// A client that would exceed a connection limit gets
     /// [`Refusal::Busy`](procps_core::helper::Refusal::Busy).
@@ -260,7 +265,12 @@ impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
 
             // Check before accepting. A listener that accepted first would
             // always have an open connection here while clients keep arriving.
-            if slots.state().oldest().is_none() && started.elapsed() >= self.lifetime {
+            // A snapshot can outlive its connection while a read from the
+            // kernel runs. Exiting would block on that read while launchd
+            // starts no replacement.
+            let idle = slots.state().oldest().is_none() && !self.server.taking_snapshots();
+
+            if idle && started.elapsed() >= self.lifetime {
                 tracing::info!("stopping after the helper's lifetime");
                 return Ok(());
             }
@@ -276,7 +286,7 @@ impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
                     tracing::error!(?oldest, "a connection is stuck, so stopping");
                     return Err(ListenError::Stuck(oldest));
                 }
-            } else if state.quiet.elapsed() >= self.idle {
+            } else if idle && state.quiet.elapsed() >= self.idle {
                 tracing::info!("stopping after the idle time");
                 return Ok(());
             }
@@ -328,7 +338,11 @@ impl<S: ProcessSource + Send + Sync + 'static> Listener<S> {
 
 /// Serves `stream`, whose client is `peer`, with `server`, and logs an error
 /// that ends the connection.
-fn serve<S: ProcessSource>(server: &Server<S>, stream: &UnixStream, peer: Peer) {
+fn serve<S: ProcessSource + Send + Sync + 'static>(
+    server: &Server<S>,
+    stream: &UnixStream,
+    peer: Peer,
+) {
     if let Err(error) = server.serve_peer(stream, peer) {
         tracing::debug!(error = %ErrorChain(&error), "cannot serve a connection");
     }

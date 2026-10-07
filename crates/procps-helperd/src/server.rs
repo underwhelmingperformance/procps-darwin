@@ -6,15 +6,17 @@ use std::{
     io,
     num::NonZeroUsize,
     os::unix::net::UnixStream,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
 use darwin_proc::Peer;
 use procps_core::{
-    ErrorChain, ProcessSource, SnapshotRequest,
+    Budget, ErrorChain, ProcessSource, SnapshotRequest, SourceError,
     helper::{
-        Caller, Deadline, ProtocolError, ReadMessage, Refusal, Request, Response, WriteMessage,
+        Caller, Deadline, Message, ProtocolError, ReadMessage, Refusal, Request, Response,
+        WriteMessage,
     },
 };
 
@@ -92,9 +94,9 @@ impl Default for TimeLimits {
 /// ```
 #[derive(Debug)]
 pub struct Server<S> {
-    source: S,
+    source: Arc<S>,
     limits: TimeLimits,
-    workers: Workers,
+    workers: Arc<Workers>,
 }
 
 /// An error that ends a connection before the helper can send a response.
@@ -109,7 +111,7 @@ pub enum ServeError {
     Protocol(#[from] ProtocolError),
 }
 
-impl<S: ProcessSource> Server<S> {
+impl<S: ProcessSource + Send + Sync + 'static> Server<S> {
     /// A server that reads process data from `source`, within `limits`.
     ///
     /// ```
@@ -124,9 +126,9 @@ impl<S: ProcessSource> Server<S> {
         let processors = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
 
         Self {
-            source,
+            source: Arc::new(source),
             limits,
-            workers: Workers::new(processors),
+            workers: Arc::new(Workers::new(processors)),
         }
     }
 
@@ -144,7 +146,7 @@ impl<S: ProcessSource> Server<S> {
     #[must_use]
     pub fn with_workers(self, workers: NonZeroUsize) -> Self {
         Self {
-            workers: Workers::new(workers),
+            workers: Arc::new(Workers::new(workers)),
             ..self
         }
     }
@@ -234,6 +236,12 @@ impl<S: ProcessSource> Server<S> {
         Ok(())
     }
 
+    /// Whether a snapshot is running, possibly after its client has received
+    /// a refusal.
+    pub(crate) fn taking_snapshots(&self) -> bool {
+        self.workers.running()
+    }
+
     /// Sends [`Refusal::Busy`] on `stream`, to a client that the helper will
     /// not serve because too many connections are open.
     pub(crate) fn refuse_busy(&self, stream: &UnixStream) -> Result<(), ServeError> {
@@ -248,34 +256,65 @@ impl<S: ProcessSource> Server<S> {
     fn snapshot(&self, caller: Caller, peer: Peer, request: &SnapshotRequest) -> Response {
         let started = Instant::now();
         let until = started.checked_add(self.limits.snapshot).unwrap_or(started);
-        let Some(_worker) = self.workers.wait(peer.uid, until) else {
+        let Some(worker) = self.workers.wait(peer.uid, until) else {
             tracing::debug!("the wait for a worker reached the time limit");
             return Response::Refused(Refusal::Busy);
         };
 
         // A snapshot that starts with less than half its time left would
-        // probably finish after the limit. The helper would then discard it
-        // and send `TimedOut`, after keeping the worker from other requests.
+        // probably reach the limit, keep the worker from other requests until
+        // then, and end in `TimedOut`.
         if started.elapsed() > self.limits.snapshot / 2 {
             tracing::debug!("a worker became free too late for the snapshot");
             return Response::Refused(Refusal::Busy);
         }
-        let snapshot = self
-            .source
-            .snapshot(request)
-            .and_then(|snapshot| caller.redact(snapshot, &self.source));
+        let budget = Budget::UNLIMITED
+            .until(until)
+            .bytes(usize::try_from(Response::LIMIT).unwrap_or(usize::MAX));
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let source = Arc::clone(&self.source);
+        let request = request.clone();
+        let client = tracing::Span::current();
 
-        match snapshot {
-            Ok(_) if started.elapsed() > self.limits.snapshot => {
-                tracing::warn!(
-                    elapsed = ?started.elapsed(),
-                    "the snapshot took longer than the time limit"
-                );
+        // The source cannot interrupt a single read from the kernel, which can
+        // take longer than any time limit. The thread keeps the worker until
+        // the snapshot finishes, and the client gets its answer at the
+        // deadline.
+        let spawned = thread::Builder::new()
+            .name("snapshot".to_owned())
+            .spawn(move || {
+                let _client = client.enter();
+                let _worker = worker;
+                let snapshot = source
+                    .snapshot_within(&request, budget)
+                    .and_then(|snapshot| caller.redact(snapshot, source.as_ref()));
+
+                if sender.send(snapshot).is_err() {
+                    tracing::debug!("the snapshot finished after its time limit");
+                }
+            });
+
+        if let Err(error) = spawned {
+            tracing::error!(error = %ErrorChain(&error), "cannot start a thread for a snapshot");
+            return Response::Refused(Refusal::Failed);
+        }
+
+        match receiver.recv_timeout(until.saturating_duration_since(Instant::now())) {
+            Ok(Ok(snapshot)) => Response::Snapshot(Box::new(snapshot)),
+            Ok(Err(SourceError::TimedOut)) | Err(mpsc::RecvTimeoutError::Timeout) => {
+                tracing::debug!("the snapshot reached its time limit");
                 Response::Refused(Refusal::TimedOut)
             }
-            Ok(snapshot) => Response::Snapshot(Box::new(snapshot)),
-            Err(error) => {
+            Ok(Err(error @ SourceError::TooLarge { .. })) => {
+                tracing::debug!(error = %ErrorChain(&error), "the snapshot is too large");
+                Response::Refused(Refusal::ResponseTooLarge)
+            }
+            Ok(Err(error)) => {
                 tracing::error!(error = %ErrorChain(&error), "cannot take a snapshot");
+                Response::Refused(Refusal::Failed)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::error!("the snapshot thread stopped without a snapshot");
                 Response::Refused(Refusal::Failed)
             }
         }
@@ -289,8 +328,10 @@ impl<S: ProcessSource> Server<S> {
         let mut connection = Deadline::new(stream, self.limits.response);
         let refusal = match connection.write_message(&response) {
             Ok(()) => return Ok(response),
+            // The snapshot's budget limits an estimate of its size in memory,
+            // not the encoding, so the encoding can still be too large.
             Err(error @ ProtocolError::TooLarge { .. }) => {
-                tracing::warn!(error = %ErrorChain(&error), "cannot send the snapshot");
+                tracing::debug!(error = %ErrorChain(&error), "cannot send the snapshot");
                 Refusal::ResponseTooLarge
             }
             Err(error @ ProtocolError::Encoding(_)) => {

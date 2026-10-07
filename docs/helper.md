@@ -24,15 +24,16 @@ and will read process data itself when the helper fails.
 
 launchd starts the helper when a tool connects to
 `/var/run/procps-helperd.sock`. The helper exits 60 seconds after it starts or
-after its last connection closes, whichever is later. After it has run for an
-hour, it also exits when a tool connects while it has no open connection, or
-within a second once it has no open connection. launchd then starts a new helper
-for the next connection.
+after its last connection closes, whichever is later, but not while a snapshot
+is running. After it has run for an hour, it also exits when a tool connects
+while it has no open connection and no running snapshot, or within a second once
+it has neither. launchd then starts a new helper for the next connection.
 
 The helper logs JSON to `/var/log/procps-helperd.log`, and newsyslog rotates the
-log. The log can record which users ran the tools and when: every request at the
-`debug` level, and requests that exceed a limit at the default level. Only root
-and members of the `admin` group can read it.
+log. An administrator can turn on the `debug` level, at which the log records
+every request with the client's user. Errors during a connection also record the
+client's user at the default level. Because the log records users, only root and
+members of the `admin` group can read it.
 
 [`helper-security.md`][security] describes what the helper defends against.
 

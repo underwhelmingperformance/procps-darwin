@@ -5,6 +5,7 @@
 //! The process model, process data sources and output formatting that `ps`,
 //! `top`, `pgrep` and `pkill` share.
 
+mod budget;
 mod choice;
 mod field;
 pub mod helper;
@@ -16,6 +17,7 @@ mod snapshot;
 mod source;
 mod summary;
 
+pub use budget::Budget;
 pub use choice::{ChoiceError, HelperOrLocal, SOURCE_VARIABLE, Source, SourceChoice};
 pub use field::Field;
 pub use linux::{LinuxPolicy, LinuxPriority, LinuxSizes, LinuxState};

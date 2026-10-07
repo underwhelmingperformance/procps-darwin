@@ -7,10 +7,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use darwin_proc::{Arguments, Host, Pid, ProcessInfo};
+use darwin_proc::{Arguments, Host, Pid, ProcessInfo, Region};
 
 use crate::{
-    Field, FieldGroup, Process, Snapshot, SnapshotRequest, System, Usage, helper::HelperError,
+    Budget, Field, FieldGroup, Process, Snapshot, SnapshotRequest, System, Usage, budget::Spending,
+    helper::HelperError,
 };
 
 /// Takes snapshots of processes and the system.
@@ -27,6 +28,35 @@ pub trait ProcessSource {
     /// one value for one process is not an error: the value is a [`Field`]
     /// that records why the source has no value.
     fn snapshot(&self, request: &SnapshotRequest) -> Result<Snapshot, SourceError>;
+
+    /// Reads what `request` asks for, within `budget`. The default
+    /// implementation ignores the budget and calls [`ProcessSource::snapshot`].
+    /// Only [`LocalSource`] applies the budget.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Budget, LocalSource, ProcessSource, SnapshotRequest};
+    ///
+    /// let request = SnapshotRequest::default().for_processes([Pid::current()]);
+    /// let snapshot = LocalSource.snapshot_within(&request, Budget::UNLIMITED)?;
+    ///
+    /// assert_eq!(snapshot.processes.len(), 1);
+    /// # Ok::<(), procps_core::SourceError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors that [`ProcessSource::snapshot`] returns, and
+    /// [`SourceError::TimedOut`] or [`SourceError::TooLarge`] when the
+    /// snapshot reaches a limit of `budget`.
+    fn snapshot_within(
+        &self,
+        request: &SnapshotRequest,
+        budget: Budget,
+    ) -> Result<Snapshot, SourceError> {
+        let _ = budget;
+        self.snapshot(request)
+    }
 }
 
 /// An error that prevents a source from taking a snapshot.
@@ -44,6 +74,15 @@ pub enum SourceError {
     /// The source could not take the snapshot through the helper.
     #[error("cannot take a snapshot through the helper")]
     Helper(#[from] HelperError),
+    /// The snapshot reached the time limit of its [`Budget`].
+    #[error("the snapshot reached its time limit")]
+    TimedOut,
+    /// The snapshot reached the memory limit of its [`Budget`].
+    #[error("the snapshot would use more than {limit} bytes")]
+    TooLarge {
+        /// The memory limit, in bytes.
+        limit: usize,
+    },
 }
 
 /// Reads processes with `darwin-proc` directly, in the calling process,
@@ -67,6 +106,20 @@ pub struct LocalSource;
 
 /// The process exited while the source read it.
 struct Exited;
+
+/// Why the source stopped reading a process.
+enum Stopped {
+    /// The process exited, so the snapshot leaves it out.
+    Exited,
+    /// The snapshot reached a limit of its budget.
+    Budget(SourceError),
+}
+
+impl From<Exited> for Stopped {
+    fn from(Exited: Exited) -> Self {
+        Self::Exited
+    }
+}
 
 /// Converts the result of one read for `pid` into a field.
 fn field<T>(pid: Pid, result: Result<T, darwin_proc::Error>) -> Result<Field<T>, Exited> {
@@ -105,7 +158,11 @@ impl LocalSource {
 
     /// Reads the groups that `request` asks for, for the process that `info`
     /// describes.
-    fn process(info: ProcessInfo, request: &SnapshotRequest) -> Result<Process, Exited> {
+    fn process(
+        info: ProcessInfo,
+        request: &SnapshotRequest,
+        spending: &mut Spending,
+    ) -> Result<Process, Stopped> {
         let pid = info.pid;
         let mut process = Process::from_identity(
             info,
@@ -143,7 +200,7 @@ impl LocalSource {
         }
 
         if request.wants(FieldGroup::Regions) {
-            process = process.with_regions(field(pid, pid.regions())?);
+            process = process.with_regions(Self::regions(pid, spending)?);
         }
 
         if request.wants(FieldGroup::FileDescriptors) {
@@ -155,6 +212,29 @@ impl LocalSource {
         }
 
         Ok(process)
+    }
+
+    /// The memory regions of `pid`, counting each one against `spending`.
+    fn regions(pid: Pid, spending: &mut Spending) -> Result<Field<Vec<Region>>, Stopped> {
+        let walk = match pid.region_walk() {
+            Ok(walk) => walk,
+            Err(error) => return Ok(field(pid, Err(error))?),
+        };
+        let mut regions = Vec::new();
+
+        for region in walk {
+            match region {
+                Ok(region) => {
+                    spending
+                        .spend(size_of::<Region>())
+                        .map_err(Stopped::Budget)?;
+                    regions.push(region);
+                }
+                Err(error) => return Ok(field(pid, Err(error))?),
+            }
+        }
+
+        Ok(Field::Available(regions))
     }
 
     /// The environment from `arguments`, which the source read for `pid`.
@@ -199,14 +279,34 @@ impl LocalSource {
 }
 
 impl ProcessSource for LocalSource {
-    #[tracing::instrument(level = "debug", skip(self), err(level = "debug"))]
     fn snapshot(&self, request: &SnapshotRequest) -> Result<Snapshot, SourceError> {
+        self.snapshot_within(request, Budget::UNLIMITED)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self), err(level = "debug"))]
+    fn snapshot_within(
+        &self,
+        request: &SnapshotRequest,
+        budget: Budget,
+    ) -> Result<Snapshot, SourceError> {
         let taken = SystemTime::now();
         let uptime = Host::uptime().map_err(SourceError::Clock)?;
-        let mut processes: Vec<Process> = Self::infos(request)?
-            .into_iter()
-            .filter_map(|info| Self::process(info, request).ok())
-            .collect();
+        let mut spending = Spending::new(budget);
+        let mut processes = Vec::new();
+
+        for info in Self::infos(request)? {
+            spending.spend(0)?;
+
+            match Self::process(info, request, &mut spending) {
+                Ok(process) => {
+                    spending.spend(process.estimated_size())?;
+                    processes.push(process);
+                }
+                Err(Stopped::Exited) => {}
+                Err(Stopped::Budget(error)) => return Err(error),
+            }
+        }
+
         processes.sort_by_key(|process| process.info.pid);
 
         let system = if request.wants_system() {

@@ -146,7 +146,10 @@ can split its memory into millions of regions. When a request asks for the code
 and data totals, which every user receives, the helper walks the regions of
 every process that the request selects, whoever sent the request. Any user
 therefore controls the cost of every such snapshot that includes their
-processes, including other users' snapshots.
+processes, including other users' snapshots. A user whose processes have so many
+regions that the snapshot reaches a limit makes every such snapshot fail, and
+the tools of the users who asked for those snapshots then read process data
+themselves.
 
 When every worker is busy, a free worker goes to the waiting request whose user
 has the fewest snapshots running. A user who sends many expensive requests
@@ -159,55 +162,73 @@ The helper has 10 seconds, including the wait for a worker, to read the process
 data for a request. It refuses a request with `Busy` when its wait for a worker
 reaches that limit, or when a worker becomes free with less than half of the
 limit left. A user who keeps every worker busy can therefore make the helper
-refuse other users. The helper cannot interrupt a snapshot, so a slow snapshot
-keeps its worker beyond the limit, and the helper then refuses it with
-`TimedOut`.
+refuse other users. The helper checks the time before and after it reads each
+process, and after each memory region. The helper refuses the request with
+`TimedOut` when the limit passes. The snapshot stops at its next check, which
+frees the worker.
 
 ### Memory
 
-A response can be up to 256 MiB long, but the helper builds the snapshot and its
-encoding before it checks that limit. A user who controls a snapshot's size can
-therefore make the helper keep more than 256 MiB in memory for each connection.
-Each of up to 256 connections can keep a snapshot and its encoding until the
-client has received the response or the response's 10 seconds have passed. The
-helper's resident memory can stay high after those connections have closed,
-until the helper exits.
+A response can be up to 256 MiB long. The helper estimates a snapshot's size in
+memory as it reads each process and each memory region, stops the snapshot when
+the estimate passes 256 MiB, and refuses the request with `ResponseTooLarge`.
+The estimate is larger than the encoding. Each memory region counts as 96 bytes,
+about twice its encoded size, so a snapshot with about 2.8 million regions in
+all is refused although its encoding would fit. A snapshot can pass the limit by
+one process's values apart from its regions, such as its arguments, environment,
+threads and file descriptors. The helper checks the encoding's size again before
+it sends the response.
+
+The helper builds at most one snapshot on each worker at a time, but each of up
+to 256 connections keeps its finished snapshot and the encoding until the client
+has received the response or the response's 10 seconds have passed. The helper's
+resident memory can stay high after those connections have closed, until the
+helper exits.
 
 ### A stuck helper
 
+The helper checks a snapshot's time limit between processes and between memory
+regions, but it cannot interrupt a single read from the kernel. A read can take
+a long time: reading one memory region takes time in proportion to the region's
+size, and a security review measured 65 seconds for a 64 TiB private file
+mapping with one page touched. Any user can create such a mapping. The helper
+therefore takes each snapshot on a thread of its own, and answers the client
+with `TimedOut` when the time limit passes. The thread keeps its worker until
+the snapshot finishes, so a process with such a mapping costs a worker for each
+request that selects it, for as long as the read takes, which can be far beyond
+the time limit. Other users' requests can then get `Busy`. A helper that exits
+cannot finish until the read returns, and launchd runs only one instance of a
+job, so no request would be served until then. The helper therefore does not
+exit at its idle time or after an hour while a snapshot runs. So a read that
+never returns keeps the helper running with one worker fewer.
+
 A watchdog stops the helper when a connection runs 30 seconds beyond its time
-limits, 51 seconds in all by default, because a read from the kernel can block
-and the helper cannot interrupt it. launchd starts a new helper for the next
-connection, but the connections that were open fail. A user who can make a
-snapshot take that long can trigger the watchdog on purpose, and repeat it.
+limits, 51 seconds in all by default. launchd then starts a new helper for the
+next connection, but the connections that were open fail. The helper answers
+every request by its time limit, so the watchdog catches only a connection whose
+own reads or writes are stuck.
 
 A timeout or `Busy` does not make a tool stop using the helper. While
 connections get stuck, each of `top`'s refreshes can therefore wait up to 30
 seconds before `top` reads process data itself.
 
-Task 3.7 in `PLAN.md` is to make a snapshot stop at its time and size limits.
-That would remove the costs that a user controls from [Expensive
-requests][expensive], [Memory][memory] and this section. A read from the kernel
-that blocks would still trigger the watchdog.
-
-[expensive]: #expensive-requests
-[memory]: #memory
-
 ### Logs
 
-At the default level, the helper logs its start and stop, snapshots that exceed
-a limit, and errors that a client cannot cause. Any user can send requests as
-fast as the helper answers them, so the helper logs each request, and each value
-that it cannot read from a process, only at the `debug` level, which is off by
-default. A snapshot that exceeds a limit keeps a worker for seconds, which
-limits how often one user can make the helper log a warning.
+At the default level, the helper logs its start and stop, and errors that a
+client cannot cause. Any user can send requests as fast as the helper answers
+them, so the helper logs each request, each refusal that a client causes, and
+each value that it cannot read from a process only at the `debug` level, which
+is off by default. The helper logs the cause of a `Failed` refusal as an error.
 
 The helper receives its log as standard error from launchd and cannot reopen it.
 newsyslog rotates the log by renaming it, and the helper writes to the rotated
 file until it exits. A helper that has run for an hour exits at the next check
-that finds no open connection, so a user who keeps a connection open at every
-check keeps the helper writing to the rotated file, and newsyslog cannot limit
-that file's size.
+that finds no open connection and no running snapshot. A user who keeps a
+connection open, or a snapshot running, at every check therefore keeps the
+helper writing to the rotated file, and newsyslog cannot limit that file's size.
+Each request that selects a process with a large file mapping keeps a snapshot
+running for as long as the read takes, and a read that never returns keeps the
+helper writing to the rotated file for good.
 
 ## Spoofed sockets
 
@@ -250,10 +271,9 @@ Only root and processes in the `daemon` group can do either.
 Each event that a client causes includes the client's user ID, group ID and pid.
 The user and group IDs come from `getpeereid` and are reliable. The pid comes
 from `LOCAL_PEERPID`, which reports the last process to use the client's end of
-the connection, so a client can make the log show another process of its own.
-The log can therefore record which users ran the tools and when: every request
-at the `debug` level, and requests that exceed a limit at the default level. The
-installations create `/var/log/procps-helperd.log` owned by root and the `admin`
-group with mode 0640, and newsyslog creates each new log with the same mode. If
-the file is deleted, launchd creates it again with mode 0644 when it next starts
-the helper.
+the connection, so a client can make the log show another process of its own. At
+the `debug` level, the log therefore records which users ran the tools and when.
+The installations create `/var/log/procps-helperd.log` owned by root and the
+`admin` group with mode 0640, and newsyslog creates each new log with the same
+mode. If the file is deleted, launchd creates it again with mode 0644 when it
+next starts the helper.
