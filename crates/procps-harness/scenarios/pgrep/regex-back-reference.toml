@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a back-reference matches the text that its group matched"
+command = ["pgrep", "-s", "0", "^harness (a)\\1$"]
+
+[[fixture]]
+name = "n1"
+comm = "harness aa"
+
+[[fixture]]
+name = "d1"
+comm = "harness-d5"

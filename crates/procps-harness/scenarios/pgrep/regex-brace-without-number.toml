@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a brace that does not contain a count is a regex error"
+command = ["pgrep", "-s", "0", "harness-d{{x}}"]
+
+[[fixture]]
+name = "d1"
+comm = "harness-d5"

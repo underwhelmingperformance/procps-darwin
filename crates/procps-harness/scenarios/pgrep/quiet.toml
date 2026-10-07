@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--quiet prints nothing and reports the match in the exit status"
+command = ["pgrep", "-s", "0", "--quiet", "harness-alpha"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"

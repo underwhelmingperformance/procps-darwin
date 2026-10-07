@@ -60,12 +60,13 @@ impl LinuxOption {
 
 /// An error that ends `pgrep` or `pkill`.
 ///
-/// Each variant has procps-ng's message and exit status, except
-/// [`PgrepError::Unsupported`] and [`PgrepError::Unimplemented`], which have
-/// this project's own messages. The errors in reading the pid file, `-F`
-/// together with `-p`, and failed writes exit with status 1.
-/// [`PgrepError::Unimplemented`] exits with status 3, and every other variant
-/// with status 2.
+/// Each variant has procps-ng's message and exit status, except that
+/// [`PgrepError::Unsupported`], [`PgrepError::Choice`], [`PgrepError::Source`]
+/// and [`PgrepError::Unimplemented`] have this project's own messages. The
+/// errors in reading the pid file, `-F` together with `-p`, and failed writes
+/// exit with status 1. [`PgrepError::Choice`], [`PgrepError::Source`] and
+/// [`PgrepError::Unimplemented`] are fatal errors, which exit with status 3,
+/// and every other variant exits with status 2.
 ///
 /// [`PgrepError::Usage`], [`PgrepError::UnknownNamespace`] and a failed write
 /// to standard error have a message only for `Display`, because procps-ng
@@ -132,10 +133,18 @@ pub enum PgrepError {
     NoCriteria,
     /// The option is for a Linux concept that Darwin lacks.
     Unsupported(LinuxOption),
+    /// `regcomp` rejected the pattern.
+    Regex(#[from] darwin_proc::RegexError),
+    /// `PROCPS_DARWIN_SOURCE` has a value other than `local`, `helper` or the
+    /// empty string.
+    Choice(#[from] procps_core::ChoiceError),
+    /// The source could not take a snapshot of the processes.
+    Source(#[from] procps_core::SourceError),
     /// A write to standard output or standard error failed.
     Write(#[from] WriteFailure),
-    /// Selecting processes is not implemented yet.
-    Unimplemented,
+    /// The command line asks for a feature that is not implemented yet: an
+    /// output option, such as `-l`, or `pkill`'s signalling.
+    Unimplemented(&'static str),
 }
 
 /// How procps-ng lays out an error on standard error.
@@ -154,6 +163,44 @@ enum Shape {
     WithHelpHint,
     /// Only the message.
     Alone,
+}
+
+/// `error` and its sources, separated by colons. Each operating-system error
+/// has the description from [`os_message`], which leaves out Rust's `(os error
+/// N)`. A source whose message already ends the previous message is left out,
+/// because some errors include their source in their own message.
+fn describe(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut described = String::new();
+    let mut previous = String::new();
+    let mut next = Some(error);
+
+    while let Some(error) = next {
+        let mut message = match error.downcast_ref::<io::Error>() {
+            Some(error) => os_message(error),
+            None => error.to_string(),
+        };
+
+        if let Some(source) = error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            && let Some(start) = message.strip_suffix(&source.to_string())
+        {
+            message = format!("{start}{}", os_message(source));
+        }
+
+        if !previous.ends_with(&message) {
+            if !described.is_empty() {
+                described.push_str(": ");
+            }
+
+            described.push_str(&message);
+        }
+
+        previous = message;
+        next = error.source();
+    }
+
+    described
 }
 
 /// glibc's description of `error`, or Darwin's for an error that Linux lacks,
@@ -180,7 +227,7 @@ impl PgrepError {
             | Self::UnlockedPidfile(_)
             | Self::InvalidPidfile
             | Self::Write(_) => 1,
-            Self::Unimplemented => 3,
+            Self::Choice(_) | Self::Source(_) | Self::Unimplemented(_) => 3,
             _ => 2,
         }
     }
@@ -208,7 +255,10 @@ impl PgrepError {
             | Self::OpenPidfile(_)
             | Self::UnlockedPidfile(_)
             | Self::Write(WriteFailure::Stdout(_))
-            | Self::Unimplemented => Shape::Alone,
+            | Self::Regex(_)
+            | Self::Choice(_)
+            | Self::Source(_)
+            | Self::Unimplemented(_) => Shape::Alone,
         }
     }
 
@@ -258,7 +308,10 @@ impl PgrepError {
                 text(&format!("write error: {}", os_message(error)))
             }
             Self::Write(failure) => text(&failure.to_string()),
-            Self::Unimplemented => text("selecting processes is not implemented yet"),
+            Self::Regex(error) => text(&format!("regex error: {}", error.message)),
+            Self::Choice(error) => text(&describe(error)),
+            Self::Source(error) => text(&describe(error)),
+            Self::Unimplemented(feature) => text(&format!("{feature} is not implemented yet")),
         }
     }
 
@@ -390,5 +443,24 @@ mod tests {
         #[case] status: u8,
     ) {
         assert_eq!(report(&error), (expected.to_vec(), ExitCode::from(status)));
+    }
+
+    #[test]
+    fn a_source_error_has_the_c_library_s_description() {
+        let error = PgrepError::Source(procps_core::SourceError::ProcessTable(
+            darwin_proc::Error::Os {
+                call: darwin_proc::Call::ProcessTable,
+                source: std::io::Error::from_raw_os_error(libc::EPERM),
+            },
+        ));
+
+        assert_eq!(
+            report(&error),
+            (
+                b"pgrep: cannot list processes: sysctl kern.proc: Operation not permitted\n"
+                    .to_vec(),
+                ExitCode::from(3)
+            )
+        );
     }
 }

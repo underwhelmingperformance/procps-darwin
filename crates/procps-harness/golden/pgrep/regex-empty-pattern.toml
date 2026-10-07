@@ -1,0 +1,11 @@
+status = 0
+stdout = """
+{session}
+{n1}
+{d1}
+"""
+stderr = ""
+
+[fixtures]
+d1 = "running"
+n1 = "running"

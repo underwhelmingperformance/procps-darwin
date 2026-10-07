@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "\\s matches white space, as a glibc extension"
+command = ["pgrep", "-s", "0", "harness\\sa"]
+
+[[fixture]]
+name = "n1"
+comm = "harness aa"
+
+[[fixture]]
+name = "d1"
+comm = "harness-d5"

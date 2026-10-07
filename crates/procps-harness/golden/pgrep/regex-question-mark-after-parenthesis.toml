@@ -1,0 +1,9 @@
+status = 2
+stdout = ""
+stderr = """
+pgrep: regex error: Invalid preceding regular expression
+"""
+
+[fixtures]
+d1 = "running"
+n1 = "running"

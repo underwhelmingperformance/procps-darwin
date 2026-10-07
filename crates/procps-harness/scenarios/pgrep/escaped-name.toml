@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "in the C locale, each byte of a character outside ASCII is replaced with a question mark before matching"
+command = ["pgrep", "-s", "0", "-x", "harness-[?][?]"]
+
+[[fixture]]
+name = "e1"
+comm = "harness-\u00e9"

@@ -1,0 +1,11 @@
+status = 1
+stdout = ""
+stderr = """
+pgrep: pattern that searches for process name longer than 15 characters will result in zero matches
+Try `pgrep -f' option to match against the complete command line.
+"""
+
+[fixtures]
+a1 = "running"
+a2 = "running"
+b1 = "running"

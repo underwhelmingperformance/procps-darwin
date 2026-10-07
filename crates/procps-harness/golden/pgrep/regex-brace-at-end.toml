@@ -1,0 +1,8 @@
+status = 2
+stdout = ""
+stderr = '''
+pgrep: regex error: Unmatched \{
+'''
+
+[fixtures]
+d1 = "running"

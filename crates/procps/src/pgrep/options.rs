@@ -186,6 +186,10 @@ pub struct Options {
     pub(crate) filters: Filters,
     /// How the tool prints what it selected.
     pub(crate) output: Output,
+    /// The first option for a Linux concept that is still in effect after
+    /// procps-ng's checks. The tools refuse it where procps-ng would start to
+    /// select processes.
+    pub(crate) unsupported: Option<LinuxOption>,
     /// Whether the pid came from a pid file that the tool opened by its path,
     /// which procps-ng keeps open. A pid file of `-` is standard input.
     pub(crate) opened_pid_file: bool,
@@ -263,6 +267,7 @@ impl Options {
             tasks: Tasks::Processes,
             filters: Filters::default(),
             output: Output::default(),
+            unsupported: None,
             opened_pid_file: false,
         }
     }
@@ -539,11 +544,7 @@ impl<'a, I: Inputs> Replay<'a, I> {
             self.withdraw(|option| matches!(option, LinuxOption::Signal(_)));
         }
 
-        // procps-ng accepts the options for Linux concepts and would start
-        // selecting processes here.
-        if let Some(&option) = self.unsupported.first() {
-            return Err(PgrepError::Unsupported(option));
-        }
+        self.options.unsupported = self.unsupported.first().copied();
 
         Ok(Command::Run(Box::new(self.options)))
     }
@@ -563,7 +564,8 @@ impl<'a, I: Inputs> Replay<'a, I> {
 
     /// Records that the command line uses `option`, an option for a Linux
     /// concept. After procps-ng's checks, which follow the option loop, the
-    /// first option for a Linux concept that is still in effect is refused.
+    /// first option for a Linux concept that is still in effect becomes
+    /// [`Options::unsupported`].
     fn unsupported(&mut self, option: LinuxOption) {
         if !self.unsupported.contains(&option) {
             self.unsupported.push(option);
@@ -1176,6 +1178,7 @@ mod tests {
                     shell_quote: true,
                     echo: false,
                 },
+                unsupported: None,
                 opened_pid_file: false,
             }
         );
@@ -1322,15 +1325,14 @@ mod tests {
         &["pkill", "--signal", "4294967328", "x"],
         LinuxOption::Signal(LinuxSignal::RealTime)
     )]
-    fn a_linux_only_option_is_refused(
+    fn a_linux_only_option_is_recorded_for_refusal(
         #[case] mode: Mode,
         #[case] arguments: &[&str],
         #[case] expected: LinuxOption,
-    ) {
-        assert_matches!(
-            parse(mode, arguments),
-            Err(PgrepError::Unsupported(option)) if option == expected
-        );
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(options(mode, arguments)?.unsupported, Some(expected));
+
+        Ok(())
     }
 
     #[rstest]

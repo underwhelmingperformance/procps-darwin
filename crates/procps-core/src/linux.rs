@@ -46,6 +46,24 @@ impl LinuxState {
     pub fn letter(&self) -> char {
         self.letter.unwrap_or('-')
     }
+
+    /// The state letter, or `None` if the source could not read the data that
+    /// decides it.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    ///
+    /// assert_eq!(process.linux_state().known_letter(), None);
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn known_letter(&self) -> Option<char> {
+        self.letter
+    }
 }
 
 impl fmt::Display for LinuxState {
@@ -169,7 +187,7 @@ pub struct LinuxSizes {
 
 /// The longest command name on Linux, in bytes: `TASK_COMM_LEN` minus the
 /// terminating NUL.
-const COMMAND_NAME_LENGTH: usize = 15;
+pub const COMMAND_NAME_LENGTH: usize = 15;
 
 /// The highest real-time priority on Linux.
 const MAXIMUM_RT_PRIORITY: i32 = 99;

@@ -465,6 +465,7 @@ dependencies = [
  "libc",
  "libtest-mimic",
  "pretty_assertions",
+ "procps-core",
  "procps-harness",
  "rstest",
  "rustix",

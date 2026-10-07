@@ -45,7 +45,8 @@ between `R` and `S`, and `D` cannot appear. Another user's threads and task
 information are readable only through the helper, so without it only `Z`, `T`
 and `t` are available for another user's process. Linux has no letter for an
 unknown state. The tools show `-`, as they do for any value that the caller
-cannot read.
+cannot read, and `pgrep -r` selects no process whose state is unknown, even with
+`-r -`.
 
 The modifiers follow procps-ng's order:
 
@@ -200,12 +201,73 @@ Darwin keeps 16 bytes in `p_comm`. The tools keep the first 15 bytes of
 on Linux. As on Linux, the 15 bytes can end inside a multi-byte character, and
 the escaping then replaces each byte of the partial character with `?`.
 
+On Linux, a script that the kernel runs through its `#!` line has the script's
+name, whereas Darwin's `p_comm` for such a script is the name of the program
+that finally runs it. For a script called `myscript` that starts with
+`#!/bin/zsh`, `pgrep -x myscript` therefore selects nothing on macOS, and
+`pgrep -x zsh` selects it. A `#!/bin/sh` script has the name `bash` by default,
+because `/bin/sh` on macOS is a small program that runs the shell that
+`/private/var/select/sh` links to. That link refers to `bash` unless the
+administrator has changed it. `pgrep -f myscript` selects the script on both
+systems. The tools could approximate Linux's name from the arguments, but macOS
+withholds other users' arguments unless the helper reads them, so the name would
+depend on whether the helper is running.
+
+Linux also takes the name from the path that `execve` receives, so a program
+that starts through a symbolic link has the link's name. Darwin's `p_comm` has
+the name of the file that the link resolves to. A `python3` that is a link to
+`python3.14`, as Nix installs it, is therefore called `python3.14` on macOS, and
+`pgrep -x python3` selects it only on Linux. `pgrep -f python3` selects it on
+both systems, because the command line keeps the name that the caller used.
+
+## Command lines that the tools cannot read
+
+Without the helper, macOS withholds the arguments of another user's process. The
+tools then use the command line that procps-ng makes for an unreadable
+`/proc/<pid>/cmdline`: the command name in brackets, followed by `<defunct>` for
+a zombie. `pgrep -f` matches the pattern against that text. On Linux every user
+can read every process's command line, so procps-ng matches the real one. With
+the helper, the tools read every process's command line.
+
+## Environment
+
+`pgrep --env` reads each process's environment from `KERN_PROCARGS2`. macOS 27
+withholds the environment of an Apple platform binary, such as `/bin/sleep` or
+`/bin/sh`, from every process except the binary itself, and the tools treat that
+environment as unreadable. `pgrep --env` therefore never selects a platform
+binary on macOS 27. On Linux, a process's owner can read its environment from
+`/proc/<pid>/environ`, so procps-ng selects it.
+
+## Sessions
+
+Darwin's `getsid` fails for a zombie, whereas Linux reports a zombie's session.
+A process group is always in one session, so when the tools cannot read a
+process's session, `pgrep -s` takes it from another process in the same process
+group. `pgrep -s` never selects a zombie unless another member of its process
+group has a session that the source can read.
+
+## Start times
+
+procps-ng reads a process's start time from Linux as a count of clock ticks
+since boot, at 100 ticks a second, so two processes that start in the same tick
+have the same start time for `pgrep -n` and `-o`. Darwin records the start time
+by the wall clock, in microseconds. The tools subtract the time since boot,
+which `mach_continuous_time` gives, from the time of the snapshot to find the
+time of boot, then count the ticks between boot and the start. If the wall clock
+has been set since a process started, the process's start tick is offset by the
+size of the change, but never to before tick 0.
+
 ## `kernel_task`
 
 `kernel_task` has process ID 0, and even root cannot read its executable path,
 its command line or its memory regions. Its `exe` column therefore shows `-`,
 its command line shows `[kernel_task]` as for a Linux kernel thread, and the
 region columns show `-`.
+
+Linux has no process with ID 0, so procps-ng never selects one. `pgrep` leaves
+out `kernel_task`. A script that passes `pgrep`'s output to `kill` would
+otherwise send the signal to its own process group, because `kill` reads the
+process ID 0 as the caller's process group.
 
 ## Signals
 
@@ -357,6 +419,12 @@ as `az_AZ` and `ku_TR`, and has rules of its own for `mt_MT`, but Darwin
 installs none of them.
 
 ## Regular expressions
+
+procps-ng compiles the pattern when it starts to select processes. With `-A`, it
+reads the process table earlier, while it parses the options, to find its
+ancestors, so a failure to read the table comes before a regex error. The tools
+read the table after they compile the pattern. With an invalid pattern and an
+unreadable process table, `pgrep -A` therefore reports the regex error.
 
 procps-ng compiles patterns with glibc's `regcomp` and matches them with
 `regexec`. Darwin's extended syntax lacks glibc's extensions, such as
