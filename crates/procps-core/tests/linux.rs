@@ -4,7 +4,7 @@
 
 //! Maps Darwin process data onto procps-ng's Linux values.
 
-use std::time::Duration;
+use std::{ffi::OsString, time::Duration};
 
 use darwin_proc::{
     AccountingFlags, Pid, ProcessFlags, RunState, SchedulingPolicy, Status, TaskInfo, Terminal,
@@ -59,7 +59,7 @@ fn thread(run_state: RunState) -> ThreadInfo {
         current_priority: 31,
         base_priority: 31,
         max_priority: 63,
-        name: String::new(),
+        name: OsString::new(),
     }
 }
 

@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-    ffi::CStr,
+    ffi::{OsStr, OsString},
     io,
+    os::unix::ffi::OsStrExt,
     time::{Duration, SystemTime},
 };
 
@@ -43,8 +44,9 @@ pub struct ProcessInfo {
     pub session_leader: bool,
     /// When the process started.
     pub start_time: SystemTime,
-    /// The first 16 bytes of the executable's file name.
-    pub comm: String,
+    /// The first 16 bytes of the executable's file name, as the kernel keeps
+    /// them. The bytes can end inside a multi-byte character.
+    pub comm: OsString,
     /// The signals that the process ignores.
     pub ignored_signals: SignalSet,
     /// The signals that the process catches.
@@ -329,22 +331,23 @@ impl From<&KinfoProc> for ProcessInfo {
             start_time: SystemTime::UNIX_EPOCH
                 + Duration::from_secs(u64::try_from(start.tv_sec).unwrap_or(0))
                 + Duration::from_micros(u64::try_from(start.tv_usec).unwrap_or(0)),
-            comm: comm(&proc.p_comm),
+            comm: until_nul(&proc.p_comm),
             ignored_signals: SignalSet::from(proc.p_sigignore),
             caught_signals: SignalSet::from(proc.p_sigcatch),
         }
     }
 }
 
-/// The text of `p_comm`, which the kernel terminates with a NUL unless it is
-/// full.
-fn comm(bytes: &[libc::c_char; ffi::MAXCOMLEN + 1]) -> String {
+/// The bytes of a name in a fixed-size buffer, such as `p_comm`, up to the
+/// first NUL, or to the end of the buffer if it has no NUL.
+pub(crate) fn until_nul(bytes: &[libc::c_char]) -> OsString {
     let bytes: Vec<u8> = bytes.iter().map(|byte| byte.cast_unsigned()).collect();
+    let end = bytes
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(bytes.len());
 
-    CStr::from_bytes_until_nul(&bytes).map_or_else(
-        |_| String::from_utf8_lossy(&bytes).into_owned(),
-        |name| name.to_string_lossy().into_owned(),
-    )
+    OsStr::from_bytes(&bytes[..end]).to_owned()
 }
 
 impl ProcessInfo {
@@ -400,8 +403,8 @@ impl Pid {
     /// let launchd = Pid::from(1).info()?;
     ///
     /// assert_eq!(
-    ///     (launchd.comm.as_str(), launchd.credentials.euid.as_raw()),
-    ///     ("launchd", 0)
+    ///     (launchd.comm.to_str(), launchd.credentials.euid.as_raw()),
+    ///     (Some("launchd"), 0)
     /// );
     /// # Ok::<(), darwin_proc::Error>(())
     /// ```
@@ -519,7 +522,7 @@ mod tests {
             accounting: AccountingFlags::from(0x3),
             session_leader: true,
             start_time: SystemTime::UNIX_EPOCH + Duration::from_millis(1_700_000_000_250),
-            comm: "worker".to_owned(),
+            comm: "worker".into(),
             ignored_signals: SignalSet::from(0x10),
             caught_signals: SignalSet::from(0x6000),
         }
@@ -576,7 +579,7 @@ mod tests {
         assert_eq!(
             ProcessInfo::from(&kinfo),
             ProcessInfo {
-                comm: "a".repeat(ffi::MAXCOMLEN + 1),
+                comm: "a".repeat(ffi::MAXCOMLEN + 1).into(),
                 ..expected()
             }
         );

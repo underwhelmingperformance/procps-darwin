@@ -195,9 +195,9 @@ every user the path through `proc_pidpath`, and the helper passes it on, but
 
 Linux keeps 15 bytes of a process's command name, and `pgrep` warns when a
 pattern without `-f` is longer than that, because the pattern cannot match.
-Darwin keeps 16 bytes in `p_comm`. The tools cut `p_comm` to 15 bytes, at a
-character boundary, so `ps`'s `comm` column, `pgrep`'s matching and its warning
-behave as on Linux.
+Darwin keeps 16 bytes in `p_comm`. The tools keep the first 15 bytes of
+`p_comm`, so `ps`'s `comm` column, `pgrep`'s matching and its warning behave as
+on Linux. As on Linux, the 15 bytes can end inside a multi-byte character.
 
 ## `kernel_task`
 

@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{ffi::CStr, time::Duration};
+use std::{ffi::OsString, time::Duration};
 
 use crate::{
     Call, Error, Pid, SchedulingPolicy, Status, ffi,
+    info::until_nul,
     libproc::{pid_info, pid_info_into},
 };
 
@@ -36,8 +37,9 @@ pub struct ThreadInfo {
     pub base_priority: i32,
     /// The highest priority that the thread may have.
     pub max_priority: i32,
-    /// The name that the thread set, or an empty string.
-    pub name: String,
+    /// The name that the thread set, or an empty string. Its bytes need not
+    /// be UTF-8.
+    pub name: OsString,
 }
 
 /// What a thread is doing, from `pth_run_state`.
@@ -85,12 +87,6 @@ impl ThreadInfo {
     /// Decodes `raw`, the data for the thread `id`. Its CPU times are in
     /// nanoseconds.
     pub(crate) fn decode(id: u64, raw: &libc::proc_threadinfo) -> Self {
-        let name: Vec<u8> = raw
-            .pth_name
-            .iter()
-            .map(|byte| byte.cast_unsigned())
-            .collect();
-
         Self {
             id,
             user_time: Duration::from_nanos(raw.pth_user_time),
@@ -103,10 +99,7 @@ impl ThreadInfo {
             current_priority: raw.pth_curpri,
             base_priority: raw.pth_priority,
             max_priority: raw.pth_maxpriority,
-            name: CStr::from_bytes_until_nul(&name).map_or_else(
-                |_| String::from_utf8_lossy(&name).into_owned(),
-                |name| name.to_string_lossy().into_owned(),
-            ),
+            name: until_nul(&raw.pth_name),
         }
     }
 }
@@ -185,7 +178,7 @@ impl Pid {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt, time::Duration};
 
     use pretty_assertions::assert_eq;
     use rstest::rstest;
@@ -205,7 +198,7 @@ mod tests {
         raw.pth_curpri = 31;
         raw.pth_priority = 31;
         raw.pth_maxpriority = 63;
-        for (slot, byte) in raw.pth_name.iter_mut().zip(b"worker\0") {
+        for (slot, byte) in raw.pth_name.iter_mut().zip(b"bad\xff\xfe\0") {
             *slot = byte.cast_signed();
         }
 
@@ -223,7 +216,7 @@ mod tests {
                 current_priority: 31,
                 base_priority: 31,
                 max_priority: 63,
-                name: "worker".to_owned(),
+                name: OsString::from_vec(b"bad\xff\xfe".to_vec()),
             }
         );
     }

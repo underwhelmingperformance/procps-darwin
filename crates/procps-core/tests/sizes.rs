@@ -258,15 +258,15 @@ fn a_size_needs_the_groups_that_it_comes_from(
 }
 
 #[rstest]
-#[case::short("launchd", "launchd")]
-#[case::sixteen_bytes("com.apple.WebKi1", "com.apple.WebKi")]
-#[case::multibyte_at_the_limit("abcdefghijklmné", "abcdefghijklmn")]
+#[case::short("launchd", b"launchd")]
+#[case::sixteen_bytes("com.apple.WebKi1", b"com.apple.WebKi")]
+#[case::multibyte_at_the_limit("abcdefghijklmné", b"abcdefghijklmn\xc3")]
 fn a_command_name_has_at_most_15_bytes(
     #[case] comm: &str,
-    #[case] expected: &str,
+    #[case] expected: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut info = Pid::current().info()?;
-    info.comm = comm.to_owned();
+    info.comm = comm.into();
     let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
 
     assert_eq!(process.linux_comm(), expected);

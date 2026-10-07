@@ -6,8 +6,9 @@
 //! starts, `launchd` and `kernel_task`.
 
 use std::{
+    ffi::{OsStr, OsString},
     io::{BufRead, BufReader},
-    os::unix::process::CommandExt,
+    os::unix::{ffi::OsStrExt, process::CommandExt},
     path::Path,
     process::{Command, Stdio},
 };
@@ -23,7 +24,7 @@ struct Known {
     ppid: Pid,
     ruid: Uid,
     euid: Uid,
-    comm: String,
+    comm: OsString,
 }
 
 impl From<&ProcessInfo> for Known {
@@ -43,14 +44,14 @@ fn this_process() -> Result<Known, Box<dyn std::error::Error>> {
     let name = executable
         .file_name()
         .ok_or("the executable has no file name")?
-        .to_string_lossy();
+        .as_bytes();
 
     Ok(Known {
         pid: Pid::current(),
         ppid: Pid::from(i32::try_from(std::os::unix::process::parent_id())?),
         ruid: Uid::from(rustix::process::getuid().as_raw()),
         euid: Uid::from(rustix::process::geteuid().as_raw()),
-        comm: name.chars().take(16).collect(),
+        comm: OsStr::from_bytes(&name[..name.len().min(16)]).to_owned(),
     })
 }
 
@@ -83,7 +84,7 @@ fn another_users_process_is_read() -> Result<(), Box<dyn std::error::Error>> {
             ppid: Pid::from(0),
             ruid: Uid::from(0),
             euid: Uid::from(0),
-            comm: "launchd".to_owned(),
+            comm: "launchd".into(),
         }
     );
 
