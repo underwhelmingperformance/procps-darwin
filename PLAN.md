@@ -362,9 +362,12 @@ GPL-3.0-or-later. CI runs the flake checks on macOS.
 
 `crates/procps-harness` runs reference scenarios. A scenario in
 `scenarios/<tool>/<name>.toml` declares fixture processes with known names and
-one command. The harness records the exit status, standard output and standard
-error, and whether each fixture is still running, was killed or was stopped, so
-`pkill` scenarios can check which processes received a signal. Each pid in the
+one command. A fixture can also start extra threads (for `pgrep -w`), set
+variables in its environment (for `--env`) and catch signals (for `-H`). The
+harness records the exit status, standard output and standard error, and whether
+each fixture is still running, was killed or was stopped. For a running fixture,
+it also records the signals that the fixture's handlers caught. `pkill`
+scenarios can therefore check which processes received a signal. Each pid in the
 output is replaced by its name: a fixture's name, `{session}` or `{command}`.
 
 Each run starts a session leader with `setsid`, and the leader starts the

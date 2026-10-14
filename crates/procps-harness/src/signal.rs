@@ -38,6 +38,16 @@ const NAMES: &[(Signal, &str)] = &[
     (Signal::SYS, "SIGSYS"),
 ];
 
+/// The signal called `name`, such as `SIGHUP`, if `signal-hook` can register a
+/// handler for it. `signal-hook` refuses the signals in its `FORBIDDEN` list.
+pub(crate) fn catchable(name: &str) -> Option<Signal> {
+    NAMES
+        .iter()
+        .find(|(_, known)| *known == name)
+        .map(|(signal, _)| *signal)
+        .filter(|signal| !signal_hook::consts::FORBIDDEN.contains(&signal.as_raw()))
+}
+
 /// The name of the signal with the number `raw`, such as `SIGTERM`, or
 /// `signal <raw>` for a signal that only one of the systems has.
 pub(crate) fn name(raw: i32) -> String {
@@ -59,5 +69,15 @@ mod tests {
     #[case::unknown(0, "signal 0")]
     fn a_signal_has_its_posix_name(#[case] raw: i32, #[case] expected: &str) {
         assert_eq!(super::name(raw), expected);
+    }
+
+    #[rstest]
+    #[case::hangup("SIGHUP", Some(Signal::HUP))]
+    #[case::user("SIGUSR1", Some(Signal::USR1))]
+    #[case::kill("SIGKILL", None)]
+    #[case::segmentation_fault("SIGSEGV", None)]
+    #[case::without_prefix("HUP", None)]
+    fn a_signal_to_catch_is_found_by_name(#[case] name: &str, #[case] expected: Option<Signal>) {
+        assert_eq!(super::catchable(name), expected);
     }
 }
