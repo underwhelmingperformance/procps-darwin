@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
+    num::NonZeroUsize,
     ops::RangeInclusive,
     process::{Command, Stdio},
     sync::LazyLock,
@@ -24,9 +25,10 @@ pub(crate) const MASKED_PIDS: RangeInclusive<u32> = 10_000..=99_999;
 /// start of [`MASKED_PIDS`].
 ///
 /// The pids of a freshly started container, or of a recently booted Mac, are
-/// below that range. Every thread of this process waits while one of them
-/// skips pids, and each first reads the current pid, so several threads do not
-/// skip far enough to wrap the pid counter.
+/// below that range, and so are the pids after the counter wraps. Every thread
+/// of this process waits while one of them skips pids, and each first reads
+/// the current pid, so several threads do not skip far enough to wrap the pid
+/// counter.
 pub(crate) fn skip_low_pids() -> Result<(), Error> {
     let _spawning = spawn::lock();
     let shell = || {
@@ -49,22 +51,55 @@ pub(crate) fn skip_low_pids() -> Result<(), Error> {
         return Ok(());
     };
 
-    // Each `(:)` forks a subshell without executing a program.
-    let status = shell()
-        .args([
-            "-c",
-            r#"i=0; while [ "$i" -lt "$1" ]; do (:); i=$((i + 1)); done"#,
-            "sh",
-            &count.to_string(),
-        ])
-        .status()
-        .map_err(io_error)?;
+    let processors = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    let mut started = Vec::new();
+    let mut failure = None;
 
-    if !status.success() {
-        return Err(Error::SkipPids(status));
+    for share in shares(count, processors)
+        .into_iter()
+        .filter(|&share| share > 0)
+    {
+        // Each `(:)` forks a subshell without executing a program.
+        let spawned = shell()
+            .args([
+                "-c",
+                r#"i=0; while [ "$i" -lt "$1" ]; do (:); i=$((i + 1)); done"#,
+                "sh",
+                &share.to_string(),
+            ])
+            .spawn();
+
+        match spawned {
+            Ok(child) => started.push(child),
+            Err(source) => {
+                failure = Some(io_error(source));
+                break;
+            }
+        }
     }
 
-    Ok(())
+    for mut child in started {
+        match child.wait() {
+            Ok(status) if !status.success() => {
+                failure.get_or_insert(Error::SkipPids(status));
+            }
+            Ok(_) => {}
+            Err(source) => {
+                failure.get_or_insert(io_error(source));
+            }
+        }
+    }
+
+    failure.map_or(Ok(()), Err)
+}
+
+/// `count` split into `shells` parts whose sizes differ by at most one.
+fn shares(count: u32, shells: usize) -> Vec<u32> {
+    let shells = u32::try_from(shells.max(1)).unwrap_or(u32::MAX);
+
+    (0..shells)
+        .map(|index| count / shells + u32::from(index < count % shells))
+        .collect()
 }
 
 const SHELL: &str = "/bin/sh";
@@ -122,7 +157,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    use super::PidNames;
+    use super::{PidNames, shares};
 
     fn names() -> PidNames {
         [("a".to_owned(), 12345), ("b".to_owned(), 45678)]
@@ -141,6 +176,19 @@ mod tests {
     #[case::unrelated_text("no pids here\n", "no pids here\n")]
     fn pids_are_replaced_by_names(#[case] text: &str, #[case] expected: &str) {
         assert_eq!(names().mask(text), expected);
+    }
+
+    #[rstest]
+    #[case::uneven(10, 4, vec![3, 3, 2, 2])]
+    #[case::fewer_than_the_shells(2, 4, vec![1, 1, 0, 0])]
+    #[case::one_shell(5, 1, vec![5])]
+    #[case::none(0, 2, vec![0, 0])]
+    fn the_pids_to_skip_are_shared_between_the_shells(
+        #[case] count: u32,
+        #[case] shells: usize,
+        #[case] expected: Vec<u32>,
+    ) {
+        assert_eq!(shares(count, shells), expected);
     }
 
     #[rstest]
