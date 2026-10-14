@@ -376,6 +376,21 @@ and the summary area of `top`, cannot be checked this way; it belongs in
 `FixtureSource` tests, or in a later harness feature that keeps only the
 session's rows.
 
+The command's environment contains `PATH`, `HOME`, `LC_ALL=C` and `TZ=UTC`. A
+scenario's `[environment]` table adds other variables, such as
+`POSIXLY_CORRECT`, and can replace `TZ`. When the table sets `LANG` or an `LC_`
+variable, the harness leaves out `LC_ALL=C`, which would override it. The table
+must not set `PATH` or `HOME`, because the harness needs them to find the tools
+and to give each run an empty home directory.
+
+In the container, glibc has its built-in `C` and `POSIX` locales and the
+`C.UTF-8` locale that nixpkgs compiles into its output, and no time zone files.
+procps-ng would fall back to `C` for any other locale, and would read a time
+zone name such as `Europe/London` as UTC, so the golden file would record output
+for a different setting. The table therefore accepts only those three locales.
+For `TZ` it accepts only `UTC` and the POSIX `TZ` strings that glibc and macOS
+read in the same way, which `scenario.rs` describes.
+
 Masking replaces a pid with a name but leaves the spaces before it, so the
 harness gives every masked process a five-digit pid. It starts processes until
 the pid counter reaches 10000, and restarts a run whose pids fall outside 10000

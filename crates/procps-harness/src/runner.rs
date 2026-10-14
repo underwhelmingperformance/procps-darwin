@@ -452,8 +452,10 @@ impl Runner {
     /// Runs the scenario, with decoys, and returns its outcome with known pids
     /// masked.
     ///
-    /// The command runs with an empty environment apart from `PATH`, which is
-    /// the tools directory, `HOME`, `LC_ALL=C` and `TZ=UTC`.
+    /// The command's environment contains only `PATH` (the tools directory),
+    /// `HOME`, `TZ=UTC`, `LC_ALL=C` and the variables from the scenario's
+    /// `[environment]` table. The table can replace `TZ`, and the leader leaves
+    /// out `LC_ALL=C` if the table sets a locale variable.
     ///
     /// ```no_run
     /// use procps_harness::{Runner, Scenario};

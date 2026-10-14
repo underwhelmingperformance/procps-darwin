@@ -174,6 +174,16 @@ exporter.
 - A scenario's command must not stop the session leader. The harness reports a
   stop that it sees, but it can miss a stop that a `SIGCONT` undoes at once, and
   the outcome then depends on timing.
+- A scenario's command runs with `LC_ALL=C` and `TZ=UTC`. An `[environment]`
+  table in the scenario sets other variables, such as `POSIXLY_CORRECT`, and can
+  replace `TZ`. When the table sets `LANG` or an `LC_` variable, the harness
+  leaves out `LC_ALL=C`. The table must not set `PATH` or `HOME`, because the
+  harness needs them to find the tools and to give each run an empty home
+  directory. The reference container has only the `C`, `POSIX` and `C.UTF-8`
+  locales and no time zone files, so a locale must be one of those three. `TZ`
+  must be `UTC` or a POSIX `TZ` string such as `JST-9` or
+  `GMT0BST,M3.5.0/1,M10.5.0` that glibc and macOS read in the same way: summer
+  time needs two `M` rules in months 2 to 11, at least two months apart.
 
 ## Development environment
 

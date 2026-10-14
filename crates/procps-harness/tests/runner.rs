@@ -63,6 +63,10 @@ const TOOLS: &[(&str, &str)] = &[
     ("signal", "kill -TERM \"$1\"\nkill -STOP \"$2\"\n"),
     ("record", "echo \"$1\" >\"$2\"\n"),
     ("fail", "echo oops >&2\nexit 3\n"),
+    (
+        "environment",
+        "echo \"LANG=$LANG LC_ALL=$LC_ALL LC_CTYPE=$LC_CTYPE TZ=$TZ\"\n",
+    ),
     ("terminate", "kill -TERM $$\n"),
 ];
 
@@ -163,6 +167,35 @@ fn a_scenario_records_what_its_command_did(
     let tools = Tools::new()?;
 
     assert_eq!(tools.runner.run(&scenario(command, FIXTURES)?)?, expected);
+
+    Ok(())
+}
+
+#[rstest]
+#[case::defaults("", "LANG= LC_ALL=C LC_CTYPE= TZ=UTC\n")]
+#[case::all_categories(
+    "LANG = \"POSIX\"\nLC_ALL = \"C.UTF-8\"\nTZ = \"JST-9\"",
+    "LANG=POSIX LC_ALL=C.UTF-8 LC_CTYPE= TZ=JST-9\n"
+)]
+#[case::one_category("LC_CTYPE = \"C.UTF-8\"", "LANG= LC_ALL= LC_CTYPE=C.UTF-8 TZ=UTC\n")]
+fn a_scenario_sets_variables_for_its_command(
+    #[case] table: &str,
+    #[case] stdout: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let environment = format!("[environment]\n{table}\n{FIXTURES}");
+
+    assert_eq!(
+        tools
+            .runner
+            .run(&scenario(&["environment"], &environment)?)?,
+        Outcome {
+            status: 0,
+            stdout: stdout.to_owned(),
+            stderr: String::new(),
+            fixtures: all_running(),
+        }
+    );
 
     Ok(())
 }
