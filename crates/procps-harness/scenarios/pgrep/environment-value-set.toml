@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--env with a value selects only the processes whose variable has exactly that value"
+command = ["pgrep", "-s", "0", "--env", "HARNESS_MARK=1"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+environment = { HARNESS_MARK = "1" }
+
+[[fixture]]
+name = "a2"
+comm = "harness-alpha"
+environment = { HARNESS_MARK = "10" }
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

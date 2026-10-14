@@ -171,8 +171,8 @@ pub enum Stream {
 
 /// What had happened to a fixture by the time the command finished.
 ///
-/// A golden file records it as `running`, `killed by <signal>` or
-/// `stopped by <signal>`, with the signal's name:
+/// A golden file records it as `running`, `killed by <signal>`,
+/// `stopped by <signal>` or `caught <signals>`, with each signal's name:
 ///
 /// ```
 /// use procps_harness::FixtureEnd;
@@ -195,10 +195,17 @@ pub enum FixtureEnd {
     /// A signal, such as `SIGSTOP`, had stopped the fixture.
     #[display("stopped by {_0}")]
     Stopped(String),
+    /// The fixture was still running, and its handlers had caught these
+    /// signals, in the order of the fixture's `catch` list. That order is the
+    /// same on Linux and Darwin, whose signal numbers differ.
+    #[display("caught {}", _0.join(SIGNAL_SEPARATOR))]
+    Caught(Vec<String>),
 }
 
 const KILLED_BY: &str = "killed by ";
 const STOPPED_BY: &str = "stopped by ";
+const CAUGHT: &str = "caught ";
+const SIGNAL_SEPARATOR: &str = ", ";
 
 impl FromStr for FixtureEnd {
     type Err = Error;
@@ -214,6 +221,12 @@ impl FromStr for FixtureEnd {
 
         if let Some(signal) = text.strip_prefix(STOPPED_BY) {
             return Ok(Self::Stopped(signal.to_owned()));
+        }
+
+        if let Some(signals) = text.strip_prefix(CAUGHT) {
+            return Ok(Self::Caught(
+                signals.split(SIGNAL_SEPARATOR).map(str::to_owned).collect(),
+            ));
         }
 
         Err(Error::UnknownFixtureEnd(text.to_owned()))
@@ -317,6 +330,10 @@ mod tests {
     #[case::running("running", FixtureEnd::Running)]
     #[case::killed("killed by SIGTERM", FixtureEnd::Killed("SIGTERM".to_owned()))]
     #[case::stopped("stopped by SIGSTOP", FixtureEnd::Stopped("SIGSTOP".to_owned()))]
+    #[case::caught(
+        "caught SIGHUP, SIGUSR1",
+        FixtureEnd::Caught(vec!["SIGHUP".to_owned(), "SIGUSR1".to_owned()])
+    )]
     fn a_fixture_end_round_trips_through_its_text(
         #[case] text: &str,
         #[case] end: FixtureEnd,

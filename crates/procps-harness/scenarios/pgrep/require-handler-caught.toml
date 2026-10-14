@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "-H selects the processes that catch the signal"
+command = ["pgrep", "-s", "0", "-H", "--signal", "HUP", "harness"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+catch = ["SIGHUP"]
+
+[[fixture]]
+name = "a2"
+comm = "harness-alpha"
+catch = ["SIGUSR1"]
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"
+catch = ["SIGHUP", "SIGUSR1"]

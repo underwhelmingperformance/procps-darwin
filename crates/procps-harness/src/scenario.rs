@@ -13,7 +13,7 @@ use std::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, pids::PidNames};
+use crate::{Error, pids::PidNames, signal};
 
 /// The name of the session leader's pid in commands and masked output.
 pub(crate) const SESSION: &str = "session";
@@ -83,6 +83,26 @@ pub(crate) struct FixtureSpec {
     pub(crate) name: String,
     /// The process name that the system reports.
     pub(crate) comm: String,
+    /// The number of threads that the process starts in addition to its main
+    /// thread.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) threads: u8,
+    /// Variables for the process's environment, which is otherwise empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) environment: BTreeMap<String, String>,
+    /// The names of the signals that the process catches, such as `SIGHUP`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) catch: Vec<String>,
+}
+
+/// Whether `count` is zero. serde calls it to leave out a zero `threads` field
+/// when it serialises a scenario.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+const fn is_zero(count: &u8) -> bool {
+    *count == 0
 }
 
 /// One command to run in a new session, with the fixture processes that the
@@ -208,6 +228,24 @@ pub(crate) enum ScenarioError {
          no seconds or sign"
     )]
     TimeZone(String),
+    #[error(
+        "fixture {fixture:?} cannot catch {signal:?}: give a catchable signal with its SIG \
+         prefix, such as SIGHUP"
+    )]
+    Catch { fixture: String, signal: String },
+}
+
+/// Checks that `name` and `value` can be a variable in an environment.
+fn check_variable(name: &str, value: &str) -> Result<(), ScenarioError> {
+    if name.is_empty() || name.contains(['=', '\0']) {
+        return Err(ScenarioError::VariableName(name.to_owned()));
+    }
+
+    if value.contains('\0') {
+        return Err(ScenarioError::VariableValue(name.to_owned()));
+    }
+
+    Ok(())
 }
 
 impl TryFrom<ScenarioDocument> for Scenario {
@@ -226,13 +264,7 @@ impl TryFrom<ScenarioDocument> for Scenario {
         }
 
         for (name, value) in &document.environment {
-            if name.is_empty() || name.contains(['=', '\0']) {
-                return Err(ScenarioError::VariableName(name.clone()));
-            }
-
-            if value.contains('\0') {
-                return Err(ScenarioError::VariableValue(name.clone()));
-            }
+            check_variable(name, value)?;
 
             if is_locale(name) && !LOCALES.contains(&value.as_str()) {
                 return Err(ScenarioError::Locale {
@@ -268,6 +300,21 @@ impl TryFrom<ScenarioDocument> for Scenario {
                 || fixture.comm.contains('/')
             {
                 return Err(ScenarioError::Comm(fixture.comm.clone()));
+            }
+
+            for (name, value) in &fixture.environment {
+                check_variable(name, value)?;
+            }
+
+            if let Some(name) = fixture
+                .catch
+                .iter()
+                .find(|name| signal::catchable(name).is_none())
+            {
+                return Err(ScenarioError::Catch {
+                    fixture: fixture.name.clone(),
+                    signal: name.clone(),
+                });
             }
         }
 
@@ -588,10 +635,16 @@ comm = "harness-beta"
                 FixtureSpec {
                     name: "a1".to_owned(),
                     comm: "harness-alpha".to_owned(),
+                    threads: 0,
+                    environment: BTreeMap::new(),
+                    catch: Vec::new(),
                 },
                 FixtureSpec {
                     name: "b1".to_owned(),
                     comm: "harness-beta".to_owned(),
+                    threads: 0,
+                    environment: BTreeMap::new(),
+                    catch: Vec::new(),
                 },
             ],
             environment: BTreeMap::new(),
@@ -609,6 +662,29 @@ comm = "harness-beta"
     fn a_scenario_round_trips_through_toml() -> Result<(), Box<dyn std::error::Error>> {
         let scenario = by_name()?;
 
+        assert_eq!(toml::to_string(&scenario)?.parse::<Scenario>()?, scenario);
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_fixture_can_start_threads_set_variables_and_catch_signals()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let scenario: Scenario = format!(
+            "{BY_NAME}\n[[fixture]]\nname = \"t1\"\ncomm = \"harness-gamma\"\nthreads = 2\n\
+             environment = {{ MARK = \"1\" }}\ncatch = [\"SIGHUP\"]\n"
+        )
+        .parse()?;
+        let mut expected = by_name()?;
+        expected.fixtures.push(FixtureSpec {
+            name: "t1".to_owned(),
+            comm: "harness-gamma".to_owned(),
+            threads: 2,
+            environment: BTreeMap::from([("MARK".to_owned(), "1".to_owned())]),
+            catch: vec!["SIGHUP".to_owned()],
+        });
+
+        assert_eq!(scenario, expected);
         assert_eq!(toml::to_string(&scenario)?.parse::<Scenario>()?, scenario);
 
         Ok(())
@@ -707,6 +783,18 @@ comm = "harness-beta"
     #[case::rule_time_after_24(
         "[environment]\nTZ = \"GMT0BST,M3.5.0/24:30,M10.5.0\"",
         "the value of TZ"
+    )]
+    #[case::fixture_variable_name(
+        "[[fixture]]\nname = \"c1\"\ncomm = \"x\"\nenvironment = { \"A=B\" = \"x\" }",
+        "variable name \"A=B\""
+    )]
+    #[case::uncatchable_signal(
+        "[[fixture]]\nname = \"c1\"\ncomm = \"x\"\ncatch = [\"SIGKILL\"]",
+        "fixture \"c1\" cannot catch \"SIGKILL\""
+    )]
+    #[case::unknown_signal(
+        "[[fixture]]\nname = \"c1\"\ncomm = \"x\"\ncatch = [\"HUP\"]",
+        "fixture \"c1\" cannot catch \"HUP\""
     )]
     fn an_invalid_scenario_is_rejected(#[case] change: &str, #[case] message: &str) {
         let text = if change.starts_with("command") {

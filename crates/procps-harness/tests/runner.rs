@@ -32,6 +32,10 @@ const TOOLS: &[(&str, &str)] = &[
     ("find-everywhere", "/usr/bin/pgrep -x harness-gamma\n"),
     ("kill-everywhere", "/usr/bin/pkill -x harness-delta\n"),
     (
+        "hang-up-everywhere",
+        "/usr/bin/pkill -HUP -x harness-zeta\n",
+    ),
+    (
         "stop-everywhere",
         "/usr/bin/pkill -STOP -x harness-epsilon\n",
     ),
@@ -60,8 +64,15 @@ const TOOLS: &[(&str, &str)] = &[
         "echo $$ >\"$2\"\nkill -STOP \"$1\"\nexec /bin/sleep 60\n",
     ),
     ("parent", "echo \"$1 $PPID\"\n"),
-    ("signal", "kill -TERM \"$1\"\nkill -STOP \"$2\"\n"),
+    (
+        "signal",
+        "kill -TERM \"$1\"\nkill -STOP \"$2\"\nkill -HUP \"$3\"\n",
+    ),
     ("record", "echo \"$1\" >\"$2\"\n"),
+    (
+        "record-and-wait-for",
+        "echo \"$1\" >\"$2\"\nread line <\"$3\"\n",
+    ),
     ("fail", "echo oops >&2\nexit 3\n"),
     (
         "environment",
@@ -82,6 +93,7 @@ comm = "harness-alpha"
 [[fixture]]
 name = "b1"
 comm = "harness-beta"
+catch = ["SIGHUP"]
 "#;
 
 /// A directory of tools and a runner that uses them.
@@ -138,14 +150,14 @@ fn all_running() -> BTreeMap<String, FixtureEnd> {
     stderr: String::new(),
     fixtures: all_running(),
 })]
-#[case::fixture_ends(&["signal", "{a1}", "{a2}"], Outcome {
+#[case::fixture_ends(&["signal", "{a1}", "{a2}", "{b1}"], Outcome {
     status: 0,
     stdout: String::new(),
     stderr: String::new(),
     fixtures: ends(&[
         ("a1", FixtureEnd::Killed("SIGTERM".to_owned())),
         ("a2", FixtureEnd::Stopped("SIGSTOP".to_owned())),
-        ("b1", FixtureEnd::Running),
+        ("b1", FixtureEnd::Caught(vec!["SIGHUP".to_owned()])),
     ]),
 })]
 #[case::status_and_standard_error(&["fail"], Outcome {
@@ -374,6 +386,90 @@ name = "e1"
 comm = "harness-epsilon"
 "#;
 
+const ZETA: &str = r#"
+[[fixture]]
+name = "z1"
+comm = "harness-zeta"
+catch = ["SIGHUP"]
+"#;
+
+const ETA: &str = r#"
+[[fixture]]
+name = "h1"
+comm = "harness-eta"
+threads = 2
+catch = ["SIGUSR1"]
+"#;
+
+// The command writes the fixture's pid to a FIFO and waits on a second FIFO,
+// so the test reads the fixture's threads and handlers while the command runs.
+#[test]
+fn a_fixture_has_its_threads_and_handlers_when_the_command_starts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let record = tools.directory.path().join("pid");
+    let release = tools.directory.path().join("release");
+
+    for fifo in [&record, &release] {
+        nix::unistd::mkfifo(
+            fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )?;
+    }
+
+    let scenario = scenario(
+        &[
+            "record-and-wait-for",
+            "{h1}",
+            record.to_str().ok_or("path is not UTF-8")?,
+            release.to_str().ok_or("path is not UTF-8")?,
+        ],
+        ETA,
+    )?;
+    let runner = tools.runner.clone();
+    let unblock = record.clone();
+    let run = std::thread::spawn(move || {
+        let outcome = run_or_give_up(runner, scenario);
+
+        // If the command never wrote the pid, the test is still reading the
+        // FIFO, and opening the FIFO for writing ends that read.
+        let _ = rustix::fs::open(
+            &unblock,
+            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::NONBLOCK,
+            rustix::fs::Mode::empty(),
+        );
+
+        outcome
+    });
+
+    let pid = recorded_pid(&record)?;
+    let fixture = (
+        pid.task_info()?.threads,
+        pid.info()?
+            .caught_signals
+            .contains(rustix::process::Signal::USR1.as_raw()),
+    );
+    std::fs::write(&release, "\n")?;
+    let outcome = run
+        .join()
+        .map_err(|_| "the thread of the run panicked")???;
+
+    assert_eq!(
+        (fixture, outcome),
+        (
+            (3, true),
+            Outcome {
+                status: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                fixtures: ends(&[("h1", FixtureEnd::Running)]),
+            }
+        )
+    );
+
+    Ok(())
+}
+
 #[rstest]
 #[case::killed(
     "kill-everywhere",
@@ -386,6 +482,12 @@ comm = "harness-epsilon"
     EPSILON,
     "harness-epsilon",
     FixtureEnd::Stopped("SIGSTOP".to_owned())
+)]
+#[case::caught(
+    "hang-up-everywhere",
+    ZETA,
+    "harness-zeta",
+    FixtureEnd::Caught(vec!["SIGHUP".to_owned()])
 )]
 fn a_command_that_signals_a_decoy_is_an_error(
     #[case] tool: &str,

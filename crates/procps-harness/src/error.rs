@@ -4,7 +4,7 @@
 
 use std::{path::PathBuf, process::ExitStatus, time::Duration};
 
-use crate::{FixtureEnd, Outcome, Stream};
+use crate::{FixtureEnd, FixtureState, Outcome, Stream};
 
 /// An error from loading, running or comparing a scenario.
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +65,21 @@ pub enum Error {
         output: String,
         /// How the fixture exited.
         status: ExitStatus,
+    },
+    /// A fixture process did not report that it was ready within `after`, so
+    /// the runner killed it.
+    #[error(
+        "fixture {name:?} was not ready within {after:?}; it {state}, and it had written {output:?}"
+    )]
+    FixtureNotReadyInTime {
+        /// The fixture's name in the scenario.
+        name: String,
+        /// How long the runner waited.
+        after: Duration,
+        /// What the fixture was doing when the runner stopped waiting.
+        state: FixtureState,
+        /// What the fixture had written to standard output by then.
+        output: String,
     },
     /// A fixture process exited by itself before the run stopped it.
     #[error("fixture {name:?} exited with status {status}")]
@@ -168,10 +183,7 @@ pub enum Error {
     },
     /// The command signalled a decoy, which has a fixture's name but runs
     /// outside the scenario's session.
-    #[error(
-        "the command left a decoy {comm:?} {end}, so it acts on processes outside the scenario's \
-         session"
-    )]
+    #[error("the command signalled a decoy {comm:?} outside the scenario's session: {end}")]
     DecoyDisturbed {
         /// The decoy's process name.
         comm: String,
