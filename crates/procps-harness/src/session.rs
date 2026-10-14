@@ -193,16 +193,24 @@ fn lead() -> Result<Report, Error> {
     };
     let path = request.tools.join(program);
 
-    // The runner kills this process and its process group if the command runs
-    // for too long.
-    let child = Command::new(&path)
+    let mut command = Command::new(&path);
+    command
         .arg0(program)
         .args(arguments)
         .env_clear()
         .env("PATH", &request.tools)
         .env("HOME", &request.home)
-        .env("LC_ALL", "C")
-        .env("TZ", "UTC")
+        .env("TZ", "UTC");
+
+    // `LC_ALL` overrides `LANG` and every `LC_` variable.
+    if !request.scenario.sets_locale() {
+        command.env("LC_ALL", "C");
+    }
+
+    // Do not give the command its own process group: the runner ends a run by
+    // killing the leader's group.
+    let child = command
+        .envs(&request.scenario.environment)
         .current_dir(&request.home)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

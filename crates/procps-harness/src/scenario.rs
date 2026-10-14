@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fmt,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::LazyLock,
 };
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, pids::PidNames};
@@ -21,6 +23,57 @@ pub(crate) const COMMAND: &str = "command";
 
 /// The longest process name that Linux reports, without its terminating NUL.
 const COMM_MAX: usize = 15;
+
+/// The locales that a scenario may set. In the reference container, glibc has
+/// its built-in `C` and `POSIX` locales and the `C.UTF-8` locale that nixpkgs
+/// compiles into glibc's output, and no others, so procps-ng would fall back to
+/// `C` for any other locale. glibc also accepts the name `C.utf8`, which macOS
+/// lacks.
+const LOCALES: [&str; 3] = ["C", "POSIX", "C.UTF-8"];
+
+/// The time zones that a scenario may set: `UTC`, or a POSIX `TZ` string that
+/// glibc 2.44 and macOS read in the same way.
+///
+/// The reference container has no time zone files, so glibc reads a zone name
+/// such as `Europe/London` as UTC. For summer time without rules, glibc applies
+/// the US rules because the container has no `posixrules` file, whereas macOS
+/// reads its own `posixrules` file. A summer time zone therefore needs rules.
+///
+/// The two libraries read several rules that POSIX allows differently: a rule
+/// time with a sign, the Julian and zero-based day rules, two rules whose order
+/// can change from one year to the next, and a change of time close to the end
+/// of a year. Summer time therefore needs two `M` rules in months 2 to 11, at
+/// least two months apart, and a rule time is whole hours from 0 to 24 or hours
+/// and minutes, with no sign or seconds. [`is_time_zone`] checks the months.
+static TIME_ZONE: LazyLock<Regex> = LazyLock::new(|| {
+    let name = "(?:[A-Za-z]{3,}|<[A-Za-z0-9+-]{3,}>)";
+    let hours = "(?:[01]?[0-9]|2[0-4])";
+    let offset = format!("[+-]?{hours}(?::[0-5][0-9]){{0,2}}");
+    let time = "(?:(?:[01]?[0-9]|2[0-3])(?::[0-5][0-9])?|24(?::00)?)";
+    let rule = |month| format!("M(?P<{month}>[2-9]|1[01])\\.[1-5]\\.[0-6](?:/{time})?");
+    let (start, end) = (rule("start"), rule("end"));
+    let pattern = format!("^(?:UTC|{name}{offset}(?:{name}(?:{offset})?,{start},{end})?)$");
+
+    Regex::new(&pattern).expect("the time zone pattern is valid")
+});
+
+/// Whether `value` matches [`TIME_ZONE`]. If the value has rules for summer
+/// time, the months of the two rules must also be at least two apart.
+fn is_time_zone(value: &str) -> bool {
+    let Some(captures) = TIME_ZONE.captures(value) else {
+        return false;
+    };
+    let month = |name| {
+        captures
+            .name(name)
+            .and_then(|month| month.as_str().parse::<u8>().ok())
+    };
+
+    match (month("start"), month("end")) {
+        (Some(start), Some(end)) => start.abs_diff(end) >= 2,
+        _ => true,
+    }
+}
 
 /// A process for a scenario to start before it runs its command.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -63,6 +116,11 @@ pub struct Scenario {
     pending: bool,
     pub(crate) command: Vec<Argument>,
     pub(crate) fixtures: Vec<FixtureSpec>,
+    /// Variables for the command's environment. The session leader adds them
+    /// after the harness's own variables, so a variable named `TZ` replaces the
+    /// harness's value. The leader sets `LC_ALL=C` only if the table sets no
+    /// locale variable.
+    pub(crate) environment: BTreeMap<String, String>,
 }
 
 impl Scenario {
@@ -82,6 +140,17 @@ impl Scenario {
     pub fn is_pending(&self) -> bool {
         self.pending
     }
+
+    /// Whether the `[environment]` table sets a locale variable: `LANG` or any
+    /// `LC_` variable.
+    pub(crate) fn sets_locale(&self) -> bool {
+        self.environment.keys().any(|name| is_locale(name))
+    }
+}
+
+/// Whether `name` is a locale variable: `LANG` or any `LC_` variable.
+fn is_locale(name: &str) -> bool {
+    name == "LANG" || name.starts_with("LC_")
 }
 
 impl FromStr for Scenario {
@@ -102,6 +171,8 @@ pub(crate) struct ScenarioDocument {
     command: Vec<String>,
     #[serde(default, rename = "fixture", skip_serializing_if = "Vec::is_empty")]
     fixtures: Vec<FixtureSpec>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    environment: BTreeMap<String, String>,
 }
 
 /// Why a scenario file is not a valid scenario.
@@ -122,6 +193,21 @@ pub(crate) enum ScenarioError {
     UnmatchedBrace { argument: String },
     #[error("{argument:?} refers to {name:?}, which is not a fixture or {SESSION:?}")]
     UnknownPid { argument: String, name: String },
+    #[error("`[environment]` must not set {0}, because the harness sets it")]
+    ReservedVariable(String),
+    #[error("variable name {0:?} must not be empty or contain `=` or a NUL")]
+    VariableName(String),
+    #[error("the value of {0} must not contain a NUL")]
+    VariableValue(String),
+    #[error("the value of {name}, {value:?}, must be one of the locales {LOCALES:?}")]
+    Locale { name: String, value: String },
+    #[error(
+        "the value of TZ, {0:?}, must be UTC or a POSIX TZ string such as JST-9 or \
+         GMT0BST,M3.5.0/1,M10.5.0. A summer time zone needs two M rules in months 2 to 11, at \
+         least two months apart, and a rule time must be from 0 to 24 hours, with minutes but \
+         no seconds or sign"
+    )]
+    TimeZone(String),
 }
 
 impl TryFrom<ScenarioDocument> for Scenario {
@@ -130,6 +216,34 @@ impl TryFrom<ScenarioDocument> for Scenario {
     fn try_from(document: ScenarioDocument) -> Result<Self, Self::Error> {
         if document.command.is_empty() {
             return Err(ScenarioError::NoCommand);
+        }
+
+        if let Some(reserved) = ["PATH", "HOME"]
+            .into_iter()
+            .find(|name| document.environment.contains_key(*name))
+        {
+            return Err(ScenarioError::ReservedVariable(reserved.to_owned()));
+        }
+
+        for (name, value) in &document.environment {
+            if name.is_empty() || name.contains(['=', '\0']) {
+                return Err(ScenarioError::VariableName(name.clone()));
+            }
+
+            if value.contains('\0') {
+                return Err(ScenarioError::VariableValue(name.clone()));
+            }
+
+            if is_locale(name) && !LOCALES.contains(&value.as_str()) {
+                return Err(ScenarioError::Locale {
+                    name: name.clone(),
+                    value: value.clone(),
+                });
+            }
+
+            if name == "TZ" && !is_time_zone(value) {
+                return Err(ScenarioError::TimeZone(value.clone()));
+            }
         }
 
         let mut names = HashSet::from([SESSION]);
@@ -182,6 +296,7 @@ impl TryFrom<ScenarioDocument> for Scenario {
             pending: document.pending,
             command,
             fixtures: document.fixtures,
+            environment: document.environment,
         })
     }
 }
@@ -193,6 +308,7 @@ impl From<Scenario> for ScenarioDocument {
             pending: scenario.pending,
             command: scenario.command.iter().map(ToString::to_string).collect(),
             fixtures: scenario.fixtures,
+            environment: scenario.environment,
         }
     }
 }
@@ -438,6 +554,8 @@ fn file_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
@@ -476,6 +594,7 @@ comm = "harness-beta"
                     comm: "harness-beta".to_owned(),
                 },
             ],
+            environment: BTreeMap::new(),
         })
     }
 
@@ -490,6 +609,34 @@ comm = "harness-beta"
     fn a_scenario_round_trips_through_toml() -> Result<(), Box<dyn std::error::Error>> {
         let scenario = by_name()?;
 
+        assert_eq!(toml::to_string(&scenario)?.parse::<Scenario>()?, scenario);
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_scenario_sets_variables_in_its_command_s_environment()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let scenario: Scenario =
+            format!(
+                "{BY_NAME}\n[environment]\nPOSIXLY_CORRECT = \"1\"\nLC_ALL = \"C.UTF-8\"\nTZ = \"GMT0BST,M3.5.0/1,M10.5.0\"\n"
+            )
+                .parse()?;
+
+        assert_eq!(
+            scenario,
+            Scenario {
+                environment: [
+                    ("LC_ALL", "C.UTF-8"),
+                    ("POSIXLY_CORRECT", "1"),
+                    ("TZ", "GMT0BST,M3.5.0/1,M10.5.0"),
+                ]
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect(),
+                ..by_name()?
+            }
+        );
         assert_eq!(toml::to_string(&scenario)?.parse::<Scenario>()?, scenario);
 
         Ok(())
@@ -515,6 +662,52 @@ comm = "harness-beta"
     #[case::unknown_pid("command = [\"ps\", \"-p\", \"{zz}\"]", "refers to \"zz\"")]
     #[case::unmatched_close("command = [\"echo\", \"}\"]", "unmatched")]
     #[case::unclosed_reference("command = [\"echo\", \"{a1\"]", "unmatched")]
+    #[case::path("[environment]\nPATH = \"/bin\"", "must not set PATH")]
+    #[case::home("[environment]\nHOME = \"/\"", "must not set HOME")]
+    #[case::empty_variable_name("[environment]\n\"\" = \"x\"", "variable name \"\"")]
+    #[case::variable_name_with_equals("[environment]\n\"A=B\" = \"x\"", "variable name \"A=B\"")]
+    #[case::variable_name_with_nul("[environment]\n\"A\\u0000\" = \"x\"", "variable name \"A\\0\"")]
+    #[case::value_with_nul("[environment]\nA = \"x\\u0000\"", "the value of A")]
+    #[case::lang("[environment]\nLANG = \"en_GB.UTF-8\"", "the value of LANG")]
+    #[case::locale_category("[environment]\nLC_CTYPE = \"en_GB.UTF-8\"", "the value of LC_CTYPE")]
+    #[case::time_zone_name("[environment]\nTZ = \"Europe/London\"", "the value of TZ")]
+    #[case::time_zone_file("[environment]\nTZ = \":UTC\"", "the value of TZ")]
+    #[case::summer_time_without_rules("[environment]\nTZ = \"EST5EDT\"", "the value of TZ")]
+    #[case::offset_too_large("[environment]\nTZ = \"ABC25\"", "the value of TZ")]
+    #[case::month_out_of_range(
+        "[environment]\nTZ = \"GMT0BST,M13.1.0,M10.5.0\"",
+        "the value of TZ"
+    )]
+    #[case::week_out_of_range("[environment]\nTZ = \"GMT0BST,M3.9.0,M10.5.0\"", "the value of TZ")]
+    #[case::rule_time_with_a_minus(
+        "[environment]\nTZ = \"GMT0BST,M3.5.0/-1,M10.5.0\"",
+        "the value of TZ"
+    )]
+    #[case::rule_time_with_a_plus(
+        "[environment]\nTZ = \"GMT0BST,M3.5.0/+1,M10.5.0\"",
+        "the value of TZ"
+    )]
+    #[case::zero_based_day_365("[environment]\nTZ = \"GMT0BST,0,365\"", "the value of TZ")]
+    #[case::zero_based_days("[environment]\nTZ = \"AAA3BBB,0,364\"", "the value of TZ")]
+    #[case::julian_days("[environment]\nTZ = \"AAA3BBB,J1/0,J365/24\"", "the value of TZ")]
+    #[case::rule_in_december(
+        "[environment]\nTZ = \"AAA3BBB,M3.2.0,M12.5.0/24\"",
+        "the value of TZ"
+    )]
+    #[case::rule_in_january("[environment]\nTZ = \"AAA3BBB,M1.1.0/0,M11.1.0\"", "the value of TZ")]
+    #[case::rules_in_one_month("[environment]\nTZ = \"AAA0BBB,M2.5.4,M2.5.5\"", "the value of TZ")]
+    #[case::rules_in_adjacent_months(
+        "[environment]\nTZ = \"AAA0BBB,M3.5.0,M4.1.0\"",
+        "the value of TZ"
+    )]
+    #[case::rule_time_with_seconds(
+        "[environment]\nTZ = \"GMT0BST,M3.5.0/1:00:00,M10.5.0\"",
+        "the value of TZ"
+    )]
+    #[case::rule_time_after_24(
+        "[environment]\nTZ = \"GMT0BST,M3.5.0/24:30,M10.5.0\"",
+        "the value of TZ"
+    )]
     fn an_invalid_scenario_is_rejected(#[case] change: &str, #[case] message: &str) {
         let text = if change.starts_with("command") {
             BY_NAME.replace(
@@ -529,6 +722,23 @@ comm = "harness-beta"
             text.parse::<Scenario>(),
             Err(error) if error.message().contains(message),
             "expected an error containing {message:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::utc("UTC")]
+    #[case::offset("JST-9")]
+    #[case::largest_offset("ABC-24:59:59")]
+    #[case::northern_summer("GMT0BST,M3.5.0/1,M10.5.0")]
+    #[case::southern_summer("AEST-10AEDT,M10.1.0,M4.1.0/3")]
+    #[case::months_two_apart("AAA0BBB,M2.5.0/24,M4.1.0/0")]
+    #[case::limits("AAA24BBB-24:59:59,M2.1.0/0,M11.5.6/24:00")]
+    fn a_time_zone_that_both_libraries_read_alike_is_accepted(#[case] zone: &str) {
+        let text = format!("{BY_NAME}\n[environment]\nTZ = \"{zone}\"\n");
+
+        assert_matches!(
+            text.parse::<Scenario>(),
+            Ok(scenario) if scenario.environment == BTreeMap::from([("TZ".to_owned(), zone.to_owned())])
         );
     }
 
