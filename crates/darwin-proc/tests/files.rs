@@ -5,9 +5,9 @@
 //! Reads the working directory and open file descriptors of live processes.
 
 use std::{
+    io::{BufRead, BufReader},
     path::Path,
     process::{Child, Command, Stdio},
-    time::{Duration, Instant},
 };
 
 use assert_matches::assert_matches;
@@ -19,12 +19,18 @@ use pretty_assertions::assert_eq;
 struct WaitingChild(Child);
 
 impl WaitingChild {
+    /// Starts the shell and returns once it has opened descriptor 7.
     fn start(directory: &Path) -> std::io::Result<Self> {
-        let child = Command::new("/bin/sh")
-            .args(["-c", "exec 7</dev/null; read line"])
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exec 7</dev/null; echo; read line"])
             .current_dir(directory)
             .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
             .spawn()?;
+
+        if let Some(stdout) = child.stdout.take() {
+            BufReader::new(stdout).read_line(&mut String::new())?;
+        }
 
         Ok(Self(child))
     }
@@ -41,26 +47,6 @@ impl Drop for WaitingChild {
     }
 }
 
-/// Polls `pid` until the shell has opened descriptor 7. The shell opens it
-/// only after it starts, so a read straight after the spawn can miss it.
-fn descriptors_once_open(pid: Pid) -> Result<Vec<i32>, Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-
-    loop {
-        let descriptors = pid.file_descriptors()?;
-
-        if descriptors.contains(&7) {
-            return Ok(descriptors);
-        }
-
-        if Instant::now() > deadline {
-            return Err(format!("descriptor 7 never opened: {descriptors:?}").into());
-        }
-
-        std::thread::yield_now();
-    }
-}
-
 #[test]
 fn a_child_reports_its_working_directory_and_descriptors() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -68,7 +54,7 @@ fn a_child_reports_its_working_directory_and_descriptors() -> Result<(), Box<dyn
     let child = WaitingChild::start(directory.path())?;
     let pid = child.pid()?;
 
-    let descriptors = descriptors_once_open(pid)?;
+    let descriptors = pid.file_descriptors()?;
     let working_directory = pid.working_directory()?;
 
     assert_eq!(
