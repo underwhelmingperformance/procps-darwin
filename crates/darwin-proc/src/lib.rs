@@ -11,6 +11,7 @@
 )]
 
 mod arguments;
+mod calendar;
 mod catch;
 mod error;
 mod ffi;
@@ -37,6 +38,7 @@ mod time;
 mod user;
 
 pub use arguments::{Arguments, MalformedArguments};
+pub use calendar::CalendarTime;
 pub use catch::{SignalResponse, catch_signals, unblock_signal};
 pub use error::{Call, Error};
 pub use info::{AccountingFlags, Credentials, ProcessFlags, ProcessInfo, Status, Terminal};
