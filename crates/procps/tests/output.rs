@@ -80,10 +80,16 @@ fn a_failed_write_to_standard_error_makes_the_status_1() -> std::io::Result<()> 
 #[rstest]
 #[case::pgrep(env!("CARGO_BIN_EXE_pgrep"))]
 #[case::pkill(env!("CARGO_BIN_EXE_pkill"))]
-fn a_write_to_a_closed_pipe_ends_the_tool_with_sigpipe(#[case] tool: &str) -> std::io::Result<()> {
+fn a_write_to_a_closed_pipe_ends_the_tool_with_sigpipe(
+    #[case] tool: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let _alone = alone();
     let (reader, writer) = std::io::pipe()?;
     drop(reader);
+
+    // The child inherits this thread's signal mask. With `SIGPIPE` blocked,
+    // the write would fail with `EPIPE` and raise no signal.
+    darwin_proc::unblock_signal(libc::SIGPIPE)?;
 
     let status = Command::new(tool)
         .arg("-h")
