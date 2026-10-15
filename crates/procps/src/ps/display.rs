@@ -10,8 +10,10 @@
 
 use std::{collections::BTreeSet, io::Write};
 
-use darwin_proc::{CalendarTime, Pid};
-use procps_core::{Charset, LinuxTask, ProcessSource, Snapshot, SnapshotRequest, SourceError};
+use darwin_proc::{CalendarTime, Gid, Pid, Uid};
+use procps_core::{
+    Charset, LinuxTask, ProcessSource, Snapshot, SnapshotRequest, SourceError, helper::Caller,
+};
 
 use crate::ps::{
     error::{PsError, Unimplemented},
@@ -32,6 +34,8 @@ pub(crate) struct Invocation {
     pub(crate) myself: Pid,
     /// The effective user ID of `ps`.
     pub(crate) euid: u32,
+    /// The effective group ID of `ps`.
+    pub(crate) egid: u32,
     /// The locale's character encoding.
     pub(crate) charset: Charset,
     /// The size of a memory page.
@@ -285,6 +289,7 @@ pub(crate) fn list(
         .map(|&row| data.processes[row].linux_task())
         .collect();
     let settings = print::Settings {
+        caller: Caller::new(Uid::from(invocation.euid), Gid::from(invocation.egid)),
         charset: invocation.charset,
         modifiers: options.modifiers,
         date_format: options.date_format.clone(),
@@ -421,6 +426,7 @@ mod tests {
         Invocation {
             myself: Pid::from(MYSELF),
             euid: 501,
+            egid: 20,
             charset: Charset::Utf8,
             page_size: 16_384,
             calendar: CalendarTime::utc,

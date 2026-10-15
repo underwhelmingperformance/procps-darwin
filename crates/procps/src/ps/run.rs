@@ -117,6 +117,7 @@ fn list(
     let invocation = Invocation {
         myself: Pid::current(),
         euid: rustix::process::geteuid().as_raw(),
+        egid: rustix::process::getegid().as_raw(),
         charset: Charset::from_codeset(Locale::current().codeset()),
         page_size: u64::try_from(rustix::param::page_size()).unwrap_or(16_384),
         calendar: CalendarTime::local,
