@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "trailing pids select processes by pid"
+command = ["ps", "-o", "pid=,comm=", "{b1}", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

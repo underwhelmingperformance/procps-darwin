@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a width after : sets the column's width and cuts a command name"
+command = ["ps", "-o", "pid:8,comm:4,ppid", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"

@@ -38,7 +38,8 @@ pub fn entry() -> ExitCode {
         tracing::warn!(%error, "cannot install the signal handlers");
     }
 
-    let parsed = parser::parse(&arguments, &Host::new());
+    let host = Host::new();
+    let parsed = parser::parse(&arguments, &host);
 
     let mut output = Output::new();
     let (stdout, stderr) = output.streams();
@@ -50,7 +51,7 @@ pub fn entry() -> ExitCode {
     }
 
     let status = match parsed.result {
-        Ok(command) => run::main(&argument_zero, &program, &command, stdout, stderr),
+        Ok(command) => run::main(&argument_zero, &program, &command, &host, stdout, stderr),
         Err(error) => error.report(&argument_zero, &program, stderr),
     };
 

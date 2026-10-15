@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+  PID  PPID S TTY          TIME COMMAND
+{a1} {session} S ?        00:00:00 harness-alpha
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+  PID TTY      STAT   TIME COMMAND
+{a1} ?        S      0:00 harness-alpha --procps-harness-fixture
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

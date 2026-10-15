@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "COLUMNS sets the width of the line"
+command = ["ps", "-o", "pid,args", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[environment]
+COLUMNS = "20"

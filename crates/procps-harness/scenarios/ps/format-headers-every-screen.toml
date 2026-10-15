@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--headers repeats the header at the top of each screen"
+command = ["ps", "--headers", "-o", "pid,comm", "-s", "{session}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"
+
+[environment]
+LINES = "3"

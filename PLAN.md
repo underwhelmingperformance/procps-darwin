@@ -170,7 +170,7 @@ for the user count.
 - OOM score and adjustment, NUMA nodes, hugetlb pages, LXC and Docker container
   names
 - `wchan`, the processor that a task last ran on (`psr`, top's `P`), filesystem
-  user and group IDs, and the `eip`, `esp` and `stackp` registers
+  user and group IDs
 - CPU time categories `wa`, `hi`, `si` and `st`; the `buffers` memory figure
 - `sigqueue(3)` and `process_mrelease(2)`
 
@@ -420,9 +420,8 @@ is implemented. Its test fails when the scenario matches, so that the mark is
 removed.
 
 The golden files are TOML, which crane's `cleanCargoSource` keeps, so the flake
-checks run the comparison too. The `ps -o pid=,comm=` scenario is pending until
-phase 5. User and group names, and uids, are not masked yet; the first `ps`
-scenario with user columns needs that.
+checks run the comparison too. User and group names, and uids, are not masked
+yet; the first `ps` scenario with user columns needs that.
 
 ### Phase 1: Darwin data layer (`darwin-proc`)
 
@@ -1129,9 +1128,7 @@ first and the other `PS_PERSONALITY` values after the rest of phase 5.
 or handle options such as `--help`, with which procps-ng exits before it lists
 processes. The parser produces typed options: the selection, the columns and
 sort keys, the thread display, the process tree, the header and the screen size.
-Tasks 5.2 to 5.6 select, sort and print processes from them. Until then, `ps`
-exits with status 1 and a message saying that listing processes is not
-implemented, after any command line that would list processes.
+Tasks 5.2 to 5.6 select, sort and print processes from them.
 
 procps-ng parses the command line in up to two passes. The first pass reads an
 argument that is a dash followed by a letter, such as `-ef`, as UNIX options,
@@ -1195,20 +1192,164 @@ is orphaned, and on Darwin the default action of `SIGIO` discards the signal.
 `docs/mappings.md` describes the differences on Darwin.
 
 The reference scenarios in `scenarios/ps/` check the usage text, `ps L`, and the
-errors and warnings of the parser. The scenarios for `ps -aux` without a
-warning, `PS_FORMAT`, AIX formats, headers and BSD's sort codes are pending
-until `ps` lists processes.
+errors and warnings of the parser.
 
-#### 5.2 Process selection
+#### 5.2 Process selection (done)
 
 Select processes with `-A`, `-e`, `-a`, `-d`, `-N`, `T`, `r`, `x`, `-C`, `-G`,
 `-g`, `-p`, `-q`, `-s`, `-t`, `-u`, `-U`, `--ppid` and the other long forms.
 
-#### 5.3 Format engine
+`ps` ports procps-ng's `want_this_proc` from `select.c`. `-A`, `-e` and BSD's
+`ax` select every process. Otherwise, the selection options without values
+(`-a`, `-d` and BSD's `a`, `x` and `g`) have tests, which apply when one of
+those options was given, and also when no selection list was given. A process is
+accepted if it passes those tests or if one of the lists matches it. Without any
+selection option, the tests accept the processes that have the effective user ID
+of `ps` and its controlling terminal, and in BSD syntax those that have its
+effective user ID and any terminal. BSD's `r` then keeps only the accepted
+processes that are running or in an uninterruptible wait, and `-N` inverts the
+result.
+
+`ps` first takes a snapshot of every process's identity, from which the
+selection decides whether it may select each process. If the columns, the sort
+keys or BSD's `r` need more than the identity, a second snapshot reads that
+data, only for the processes that the selection may select, because a walk of
+every process's memory regions takes seconds. The selection is then applied
+again to the second snapshot's record of each process. The row shows that
+record, so every row satisfies the selection, as in procps-ng. A process that
+exits between the two snapshots is left out, and so is one whose start time
+shows that another process has taken its pid. Without a sort key, `ps` lists the
+processes in ascending order of pid, as Linux's `/proc` lists them. For `-q`,
+and for a `-p` that procps-ng reads directly, `ps` lists the processes in the
+order of the list, once for each time that the list has a pid, as procps-ng's
+`procps_pids_select` reads them. The default selection and BSD's `T` compare
+each process's terminal with the terminal in the first snapshot's record of `ps`
+itself.
+
+Linux does not show its idle tasks, which have pid 0, in `/proc`, so procps-ng
+never lists a process with pid 0. `ps` leaves out `kernel_task`, which has pid 0
+on Darwin, as `pgrep` does. A script that passed the output of `ps -e -o pid=`
+to `kill` would otherwise signal its own process group. `-s` and the session
+columns take a zombie's session from another process in its process group, as
+`pgrep -s` does, because Darwin's `getsid` fails for a zombie. The first
+snapshot has every process, so this also works for `-p` and `-q`. The test of
+`-a` and `-d` for session leaders uses `EPROC_SLEADER`, which also decides the
+`s` in the `stat` column.
+
+Unit tests check every selection against snapshots from `FixtureSource`,
+including processes whose real, effective and saved IDs differ. The reference
+scenarios check the selections that a command can limit to its session: `-s`,
+`--sid`, `-g` with sessions, trailing sessions, process groups and pids,
+`--ppid`, `-p`, `-q`, BSD's `p`, BSD's `r` with `-p`, and the header and exit
+status 1 when no process is selected. The default selection, `-a`, `-d`, `-e`,
+`-N`, `-t`, `-u`, `-U`, `-G`, `-C`, `T`, `a` and `x` select processes outside
+the session, so only unit tests check them. BSD's `r` with a selection of the
+whole session would depend on whether the session leader is running when `ps`
+reads it.
+
+#### 5.3 Format engine (done)
 
 Format lists, custom headers (`=`), widths (`:`), sorting (`--sort`, `k`),
 `PS_FORMAT`, and the predefined formats (`-f`, `-F`, `-l`, `-j`, `j`, `l`, `s`,
 `u`, `v`, `X`, `-y`).
+
+`ps` ports `show_one_proc` and `check_header_width` from `output.c`, and
+`check_headers` and the sorting of `fancy_spew` from `display.c`. Each column
+starts where procps-ng starts it. A value that is wider than its column moves
+the rest of the line to the right, and the padding before later columns takes
+the difference back, with at most 144 spaces before a column. A column without a
+width limit, such as `args`, is cut to its width unless it is the last column,
+which has the rest of the line. procps-ng tries the screen's width and each
+multiple of it as the width of the line, and stops at the first that fits the
+columns or that reaches 65536 columns. procps-ng computes the room of the last
+column in unsigned arithmetic, so a last column that starts past the end of the
+line has the whole output buffer, and one that starts exactly at the end keeps
+only its first byte. A signal mask has 16 digits when the line has room for
+them, and 8 otherwise. With `--delimiter`, one byte separates the columns,
+without padding. The header is printed once, never, or with `--headers` at the
+top of each screen. With a single header, procps-ng leaves it out when every
+specifier's header is empty. When no process is selected, `ps` prints the
+header, unless the options leave it out, and exits with status 1.
+
+Each specifier in the table of `output.c` specifies the function that prints its
+value and the item of procps-ng's process library that it sorts by. `Printer`
+and `Item` translate those functions and items, and their variants have
+procps-ng's names. A column's text is escaped as the `escape_str` of `output.c`
+escapes it, into the column's screen cells. In a UTF-8 locale, `escape_str` uses
+glibc's `iswprint` and `wcwidth`, and Darwin's classes and widths differ from
+glibc's. `ps` therefore uses tables from glibc 2.44's locale data, which
+`scripts/generate-glibc-ctype` converts into
+`crates/procps/src/ps/glibc_ctype.rs`. The reference container uses the glibc of
+the flake's nixpkgs. `just glibc-ctype` runs the script on that glibc's source,
+with nixpkgs' patches applied, and writes the file. The flake's `glibc-ctype`
+check fails when the committed file differs from that output. The tables contain
+Unicode's data, so the file has Unicode's copyright and licence. User and group
+names are cached as procps-ng's `pwcache` caches them. When a name is too wide
+for its column, procps-ng takes the column's width in cells as a position in the
+escaped name's bytes and looks at the byte in the last position. If that byte is
+below 127, the column shows the bytes before it, followed by `+`. Otherwise the
+column shows the ID.
+
+The parser reverses the keys of each sort list, and `ps` applies the keys in
+that order, each with a stable sort. The last key applied is the most
+significant, so the first key of `--sort` decides the order, and processes that
+every key finds equal keep the order in which `ps` read them. Text sorts by its
+bytes, as `strcoll` sorts it in the C locale, and terminal names sort as glibc's
+`strverscmp` sorts them. A value that the source could not read sorts as a value
+lower than every other value: first in ascending order and last in descending
+order.
+
+The second snapshot contains only the field groups that the columns, the sort
+keys and the selection need: the arguments for `args` and `cmd`, the threads for
+the state, the usage for CPU time, memory sizes and the scheduling columns, the
+regions for `trs`, `drs` and `size`, and the system statistics for `%mem`.
+
+This task implements the specifiers of every predefined format of every
+personality, the identity, terminal, time, memory and scheduling columns, the
+columns for Linux concepts that macOS lacks, which show `-`, and procps-ng's
+placeholders and test specifiers. It also implements the modifiers that the
+printers and the layout read: BSD's `c` and `n`, the header options, `w`, `ww`,
+`--cols`, `--rows`, `COLUMNS` and `LINES`. `ps` refuses the parts of later tasks
+with status 1 and a message that says which part is missing: the thread displays
+and process trees of task 5.5, the modifiers `e`, `S`, `--cumulative` and
+`--signames`, and the specifiers and sort keys that need values that task 5.4
+adds. A zombie shows 0 for its sizes and one thread, as procps-ng shows them.
+Darwin does not report a zombie's scheduling policy, and Linux reports the
+policy that the process had before it exited, so the class `TS` of a zombie is
+an approximation, which is right for most processes.
+
+The reference scenarios check the default formats in UNIX and BSD syntax, `-j`,
+`-c`, the `bsd` personality, `-O`, BSD's `O`, a macro, the identity, terminal,
+state, priority, time, command and flag columns, placeholders, `--date-format`,
+headers, widths, a last column without room and one past the end of the line,
+the limit on padding, `--cols`, `COLUMNS`, `w`, `--delimiter`, `--no-headers`,
+BSD's `h`, `--headers` and sorting, including by start time, elapsed time and
+command line. The formats `-f`, `-F`, `-l`, `u`, `v`, `s`, `j` and `l` show user
+IDs, start times, memory sizes or signal masks, which differ between the
+reference container and macOS, so unit tests check them. A signal mask differs
+because its bits use Darwin's signal numbers. `X` shows the start of the stack
+(`stackp`), the stack pointer (`esp`) and the instruction pointer (`eip`), which
+procps-ng prints as hexadecimal numbers. This port prints `-` for those columns,
+so `X` too has only unit tests.
+
+On a system with 1100 processes, release builds took these times:
+
+| Command                             | Before two snapshots | With two snapshots  |
+| ----------------------------------- | -------------------- | ------------------- |
+| `ps -e`, `ps -e -o pid,stat`        | 0.03 to 0.2 seconds  | 0.03 to 0.2 seconds |
+| `ps v` (23 rows)                    | 4.4 seconds          | 0.14 seconds        |
+| `ps -o pid,trs --ppid <pid>`        | 4.5 seconds          | 0.01 seconds        |
+| `ps -o pid,trs -p <pid> --sort pid` | 4.6 seconds          | 0.01 seconds        |
+| `ps -e -o pid,trs`, `ps xv`         | 3.6 to 4.3 seconds   | 3.6 seconds         |
+
+A listing of `trs`, `drs` or `size` for most processes still walks most
+processes' memory regions. procps-ng computes `trs` from the bounds of the code
+segment in `/proc/<pid>/stat`. The first executable region of a Darwin process
+outside the submaps is usually the main executable's `__TEXT` segment, which
+corresponds to that segment, and a few `PROC_PIDREGIONINFO` calls could find it.
+That would change the meaning of `trs` that task 2.3 chose, and the region
+totals that the helper sends and that `top`'s `CODE` field uses, so it is left
+to task 5.4, which applies the rule for private values to `trs` and `drs`.
 
 #### 5.4 Format specifiers
 
@@ -1220,14 +1361,40 @@ footprint, energy, instructions, cycles, wired memory, context switches, CPU
 architecture, and whether the process runs under Rosetta. Final names are chosen
 under compatibility rule 5.
 
+Task 5.3 implements most specifiers. This task adds `environ`, `exe`, `fds`,
+`lim`, `supgid`, `supgrp`, `uss`, `rbytes`, `wbytes` and `cuc`, and the sort
+items that they and the placeholders `vm_data`, `vm_exe`, `vm_lib`, `vm_stack`,
+`vm_lock`, `m_resident`, `m_share`, `resident` and `cutime` sort by. Each of
+them is marked as not implemented in `Printer::is_implemented` and
+`Item::is_implemented`.
+
+Task 5.3 prints `-` for `stackp`, `esp` and `eip`, the address columns of `X`.
+This task decides whether `ps` can read them. On Linux, `stackp` is the start of
+the main thread's stack, and `esp` and `eip` are 0 except for a task that is
+exiting or dumping core. Darwin has each thread's stack pointer and program
+counter, which `thread_get_state` reads with `ARM_THREAD_STATE64`, but the call
+needs a port for the thread, and a thread's port comes from a port for its task.
+A probe on macOS 27, run as an unprivileged user with developer mode off and SIP
+on, asked for the task port of another ad hoc signed process of the same user.
+`task_for_pid` failed with `KERN_FAILURE`, and `task_read_for_pid` and
+`task_inspect_for_pid` failed as well. The probe did not run as root. As root,
+`task_for_pid` fails for platform binaries (see "What macOS exposes"). XNU
+checks a request for a task's read port separately from a request for its
+control port, though, and `thread_get_state` accepts a thread's read port. This
+task probes `task_read_for_pid` as root, for platform binaries and for other
+processes, and decides whether the helper reads the registers and where the
+start of the stack comes from.
+
 #### 5.5 Threads and forest
 
-`-L`, `-T`, `H`, `m`, `-m`, `--forest`, `-H` and `f`.
+`-L`, `-T`, `H`, `m`, `-m`, `--forest`, `-H` and `f`. Until this task, `ps`
+refuses them with status 1.
 
 #### 5.6 Output modifiers
 
 `c`, `e`, `n`, `S`, `h`, `--headers`, `--no-headers`, `w`, `ww`, `--cols`, and
-the `COLUMNS` and `LINES` environment variables.
+the `COLUMNS` and `LINES` environment variables. Task 5.3 implements all of them
+except `e` and `S`, and this task adds those two and `--signames`.
 
 #### 5.7 Tests
 

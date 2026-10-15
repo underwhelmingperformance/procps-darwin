@@ -35,5 +35,9 @@ helper-plist:
     install -m 644 "$(nix build --no-link --print-out-paths .#helper-plist)" \
       packaging/launchd/io.github.underwhelmingperformance.procps-helperd.plist
 
+glibc-ctype:
+    install -m 644 "$(nix build --no-link --print-out-paths .#glibc-ctype)" \
+      crates/procps/src/ps/glibc_ctype.rs
+
 check: clippy test doc deny audit reuse
     nix flake check

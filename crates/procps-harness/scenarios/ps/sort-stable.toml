@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "processes that the key finds equal keep their order"
+command = ["ps", "--sort=ni", "-s", "{session}", "-o", "pid=,comm="]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

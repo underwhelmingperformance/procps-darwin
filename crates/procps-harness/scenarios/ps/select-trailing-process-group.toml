@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a trailing -<pgid> selects the processes in a process group"
+command = ["ps", "-o", "pid=,comm=", "-{session}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

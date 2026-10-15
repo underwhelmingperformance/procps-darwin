@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+ADDR ALARM JOBC  SL  RE TMOUT COMMAND
+   -     -    -   -   -     - harness-alpha
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

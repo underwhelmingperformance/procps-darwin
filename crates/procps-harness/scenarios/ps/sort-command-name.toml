@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--sort=comm sorts by command name"
+command = ["ps", "--sort=comm", "-s", "{session}", "-o", "comm="]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

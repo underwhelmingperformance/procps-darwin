@@ -26,7 +26,7 @@ pub(crate) struct Clock {
 
 impl Clock {
     /// Linux's `USER_HZ`.
-    const HERTZ: u64 = 100;
+    pub(crate) const HERTZ: u64 = 100;
 
     /// The clock of `snapshot`.
     pub(crate) fn new(snapshot: &Snapshot) -> Self {
@@ -40,10 +40,15 @@ impl Clock {
     }
 
     /// The whole ticks in `duration`.
-    fn ticks(duration: Duration) -> u64 {
+    pub(crate) fn ticks(duration: Duration) -> u64 {
         let nanoseconds_per_tick = u128::from(1_000_000_000 / Self::HERTZ);
 
         u64::try_from(duration.as_nanos() / nanoseconds_per_tick).unwrap_or(u64::MAX)
+    }
+
+    /// The ticks between boot and the snapshot.
+    pub(crate) const fn now(self) -> u64 {
+        self.now
     }
 
     /// The tick in which `start` falls, as procps-ng's `TICS_BEGAN` item

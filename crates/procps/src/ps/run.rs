@@ -9,15 +9,18 @@
 
 use std::{ffi::OsStr, io::Write, process::ExitCode};
 
-use darwin_proc::Pid;
+use darwin_proc::{CalendarTime, Locale, Pid};
+use procps_core::{Charset, SourceChoice};
 
 use crate::{
     program::PROCPS_NG_VERSION,
     ps::{
+        display::{self, Invocation},
         error::PsError,
         help,
-        options::{Command, Info},
+        options::{Command, Info, Options},
         specifier,
+        system::System,
     },
 };
 
@@ -102,13 +105,39 @@ fn info_text(info: &Info, itself: Itself) -> Vec<u8> {
     .concat()
 }
 
+/// Lists the processes that `options` select, from the source that
+/// `PROCPS_DARWIN_SOURCE` and the helper decide, and returns the exit status:
+/// 0 if `ps` listed a process, and 1 otherwise, as in procps-ng.
+fn list(
+    options: &Options,
+    system: &dyn System,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<ExitCode, PsError> {
+    let invocation = Invocation {
+        myself: Pid::current(),
+        euid: rustix::process::geteuid().as_raw(),
+        charset: Charset::from_codeset(Locale::current().codeset()),
+        page_size: u64::try_from(rustix::param::page_size()).unwrap_or(16_384),
+        calendar: CalendarTime::local,
+    };
+    let source = SourceChoice::current().choose()?;
+
+    if display::list(options, &invocation, &source, system, stdout, stderr)? {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
+    }
+}
+
 /// Does what `command` asks `ps` to do, and returns the exit status.
 /// `argument_zero` is `argv[0]`, and `program` is the name that `ps` was run
-/// as, without its directory.
+/// as, without its directory. `system` gives the names of users and groups.
 pub(crate) fn main(
     argument_zero: &OsStr,
     program: &OsStr,
     command: &Command,
+    system: &dyn System,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> ExitCode {
@@ -128,7 +157,10 @@ pub(crate) fn main(
             Ok(())
         }
         Command::Info(info) => stderr.write_all(&info_text(info, Itself::current())),
-        Command::Run(_) => return PsError::Unimplemented.report(argument_zero, program, stderr),
+        Command::Run(options) => {
+            return list(options, system, stdout, stderr)
+                .unwrap_or_else(|error| error.report(argument_zero, program, stderr));
+        }
     };
 
     ExitCode::SUCCESS

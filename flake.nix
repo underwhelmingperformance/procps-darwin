@@ -47,6 +47,7 @@
         ./nix/checks.nix
         ./nix/devshell.nix
         ./nix/git-hooks.nix
+        ./nix/glibc-ctype.nix
         ./nix/harness.nix
         ./nix/helper.nix
         ./nix/packages.nix

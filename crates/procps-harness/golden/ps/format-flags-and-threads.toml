@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+F F F NLWP THCNT COMMAND
+0 0 0    1     1 harness-alpha
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

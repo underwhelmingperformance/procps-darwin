@@ -1,0 +1,8 @@
+status = 1
+stdout = """
+  PID TTY      STAT   TIME COMMAND
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
