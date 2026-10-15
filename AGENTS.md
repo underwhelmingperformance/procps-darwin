@@ -160,12 +160,15 @@ exporter.
 - Before `main` runs, Rust's runtime ignores `SIGPIPE` and opens `/dev/null` in
   place of a standard stream that is closed. The tools call
   `darwin_proc::restore_inherited_state` at start-up. It restores the `SIGPIPE`
-  disposition that the tool inherited, so a closed pipe (`ps aux | head`)
-  terminates the tools silently, as it terminates procps-ng, unless the parent
-  ignores `SIGPIPE`. It also replaces a standard output or standard error that
-  was closed with `/dev/null` opened for reading only, so that writes to it fail
-  with `EBADF`. procps-ng's `pgrep` and `pkill` open an epoll descriptor, which
-  takes the lowest closed descriptor. Our `pgrep` and `pkill` therefore use
+  disposition that the tool inherited, so a closed pipe (`pgrep -a . | head`)
+  terminates `pgrep` and `pkill` silently, as it terminates procps-ng's, unless
+  the parent ignores `SIGPIPE`. procps-ng's `ps` installs handlers for most
+  signals, so `ps` installs the same handlers with `darwin_proc::catch_signals`,
+  and a closed pipe makes it exit with status 0. `restore_inherited_state` also
+  replaces a standard output or standard error that was closed with `/dev/null`
+  opened for reading only, so that writes to it fail with `EBADF`. procps-ng's
+  `pgrep` and `pkill` open an epoll descriptor, which takes the lowest closed
+  descriptor. Our `pgrep` and `pkill` therefore use
   `Output::with_epoll_descriptor`, which fails writes to that stream with
   `EINVAL`. procps-ng's `ps` has no epoll descriptor, so `ps` uses
   `Output::new`, whose writes to a closed stream fail with `EBADF`.

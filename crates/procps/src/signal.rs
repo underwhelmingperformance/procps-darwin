@@ -161,6 +161,16 @@ pub(crate) fn lookup(name: &OsStr, form: Form, folding: CaseFolding) -> Lookup {
     Lookup::Unknown
 }
 
+/// The name of the signal numbered `number`, as procps-ng's
+/// `signal_number_to_name` gives it: the first name in the table with that
+/// number, so `SIGIO` is `POLL` and `SIGABRT` is `ABRT`.
+pub(crate) fn name(number: libc::c_int) -> Option<&'static str> {
+    SIGNALS
+        .iter()
+        .find(|&&(_, signal)| signal == number)
+        .map(|&(name, _)| name)
+}
+
 /// The signal with the number `number`: a Linux real-time signal for the
 /// numbers 32 to 64, and otherwise the number itself.
 pub(crate) fn from_number(number: libc::c_int) -> Lookup {

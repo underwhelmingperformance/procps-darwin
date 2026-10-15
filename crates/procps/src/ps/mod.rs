@@ -13,6 +13,7 @@ mod parser;
 mod personality;
 mod run;
 mod selection;
+mod signals;
 mod specifier;
 mod system;
 
