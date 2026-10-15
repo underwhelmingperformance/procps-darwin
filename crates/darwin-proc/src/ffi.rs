@@ -244,6 +244,10 @@ unsafe extern "C" {
         name: libc::mach_port_t,
     ) -> libc::kern_return_t;
 
+    /// `tzset` from `<time.h>`, which the `libc` crate does not declare for
+    /// Darwin.
+    pub fn tzset();
+
     /// `devname_r` from `<stdlib.h>`, which the `libc` crate does not declare.
     pub fn devname_r(
         dev: libc::dev_t,
