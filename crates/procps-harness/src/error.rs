@@ -110,8 +110,8 @@ pub enum Error {
     /// signalled every process in the session.
     #[error("the session leader was stopped by {0}")]
     LeaderStopped(String),
-    /// The runner could not start a thread that reads the session leader's
-    /// output or waits for the leader.
+    /// The runner could not start a thread that writes the request to the
+    /// session leader, reads the leader's output or waits for the leader.
     #[error("cannot start a thread for the session leader: {0}")]
     WatchThread(#[source] std::io::Error),
     /// Waiting for the session leader to exit or stop failed.
@@ -132,6 +132,12 @@ pub enum Error {
     /// The runner could not kill the session leader's process group.
     #[error("cannot kill the session leader's process group: {0}")]
     KillGroup(#[source] std::io::Error),
+    /// The runner could not send the request to the session leader.
+    #[error("cannot send the request to the session leader: {0}")]
+    WriteRequest(#[source] std::io::Error),
+    /// The thread that sends the request to the session leader panicked.
+    #[error("the thread that sends the request to the session leader panicked")]
+    WriterPanicked,
     /// The session leader could not run the scenario.
     #[error("the session leader failed: {message}")]
     Session {

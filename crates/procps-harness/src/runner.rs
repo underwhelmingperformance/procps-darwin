@@ -4,7 +4,7 @@
 
 use std::{
     collections::HashSet,
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::unix::{
         fs::PermissionsExt,
         process::{CommandExt, ExitStatusExt},
@@ -87,6 +87,19 @@ fn kill_group(group: Pid) -> Result<(), Error> {
 fn read_in_background(stream: Option<impl Read + Send + 'static>) -> Result<Reader, Error> {
     std::thread::Builder::new()
         .spawn(move || read_all(stream))
+        .map_err(Error::WatchThread)
+}
+
+/// A thread from [`write_in_background`].
+type Writer = JoinHandle<std::io::Result<()>>;
+
+/// Writes `bytes` to `stream` on another thread, then closes `stream`.
+fn write_in_background(
+    stream: Option<impl Write + Send + 'static>,
+    bytes: Vec<u8>,
+) -> Result<Writer, Error> {
+    std::thread::Builder::new()
+        .spawn(move || stream.map_or(Ok(()), |mut stream| stream.write_all(&bytes)))
         .map_err(Error::WatchThread)
 }
 
@@ -311,8 +324,8 @@ impl Runner {
     ///
     /// Returns an error if a process cannot be started, the command does not
     /// finish in time, the command signals a decoy, a signal terminates or
-    /// stops the session leader, or the runner cannot watch, read from or kill
-    /// the session leader.
+    /// stops the session leader, or the runner cannot watch, write to, read
+    /// from or kill the session leader.
     pub fn run(&self, scenario: &Scenario) -> Result<Outcome, Error> {
         self.run_with(scenario, true)
     }
@@ -356,7 +369,7 @@ impl Runner {
     /// Starts session leaders until one gets suitable pids for its processes,
     /// and returns that leader's outcome.
     fn lead(&self, request: &Request, programs: &Path) -> Result<Outcome, Error> {
-        let text = toml::to_string(request)?;
+        let text = toml::to_string(request)?.into_bytes();
         let leader = programs.join(LEADER_COMM);
         let mut last = 0;
 
@@ -379,13 +392,9 @@ impl Runner {
                 path: leader.clone(),
                 source,
             };
-            let mut child = command.spawn_alone().map_err(io_error)?;
+            let child = command.spawn_alone().map_err(io_error)?;
 
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(text.as_bytes()).map_err(io_error)?;
-            }
-
-            let (status, stdout, stderr) = match self.wait_for_session(child)? {
+            let (status, stdout, stderr) = match self.wait_for_session(child, &text)? {
                 SessionEnd::Finished {
                     status,
                     stdout,
@@ -425,14 +434,16 @@ impl Runner {
         Err(Error::NoFreePids { last })
     }
 
-    /// Waits until the session leader exits or stops, or the timeout passes,
-    /// then sends `SIGKILL` to the leader and to its process group.
-    fn wait_for_session(&self, mut leader: Child) -> Result<SessionEnd, Error> {
+    /// Sends `request` to the session leader, waits until the leader exits or
+    /// stops, or the timeout passes, then sends `SIGKILL` to the leader and to
+    /// its process group.
+    fn wait_for_session(&self, mut leader: Child, request: &[u8]) -> Result<SessionEnd, Error> {
         let pid = Pid::from_child(&leader);
         let (sender, receiver) = mpsc::channel();
-        let start = || -> Result<(Reader, Reader), Error> {
+        let start = || -> Result<(Reader, Reader, Writer), Error> {
             let stdout = read_in_background(leader.stdout.take())?;
             let stderr = read_in_background(leader.stderr.take())?;
+            let stdin = write_in_background(leader.stdin.take(), request.to_vec())?;
 
             // `NOWAIT` leaves the leader unreaped, so its pid cannot belong to
             // another process until `leader.wait` below. Darwin reports a stop
@@ -454,7 +465,7 @@ impl Runner {
                 })
                 .map_err(Error::WatchThread)?;
 
-            Ok((stdout, stderr))
+            Ok((stdout, stderr, stdin))
         };
         let threads = start();
         let waited = threads
@@ -481,9 +492,17 @@ impl Runner {
         let status = leader.wait();
         group_killed?;
         let status = status.map_err(Error::WaitLeader)?;
-        let (stdout, stderr) = threads?;
+        let (stdout, stderr, stdin) = threads?;
         let stdout = join(stdout)?;
         let stderr = join(stderr)?;
+
+        match stdin.join().map_err(|_| Error::WriterPanicked)? {
+            // The leader can exit, or the runner can kill it, before it has
+            // read the whole request. The outcome then reports how the run
+            // ended, so the broken pipe is not an error.
+            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
+            written => written.map_err(Error::WriteRequest)?,
+        }
 
         let stopped = match waited {
             Some(Ok(changed)) => changed.map_err(|errno| Error::WaitLeader(errno.into()))?,

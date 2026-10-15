@@ -541,3 +541,49 @@ fn a_run_that_takes_too_long_is_stopped(
 
     Ok(())
 }
+
+/// A request size larger than 64 KiB, the largest buffer that a macOS pipe
+/// uses. The runner's write of such a request is still going on when the
+/// leader exits or stops without reading it.
+const LARGER_THAN_A_PIPE: usize = 200_000;
+
+/// A runner whose session leader is `script`, a shell script.
+fn runner_with_leader(tools: &Tools, script: &str) -> std::io::Result<Runner> {
+    let host = tools.directory.path().join("host");
+    std::fs::write(&host, format!("#!/bin/sh\n{script}"))?;
+    std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(Runner::new(tools.directory.path(), host))
+}
+
+#[test]
+fn a_leader_that_exits_before_it_reads_the_request_reports_why()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let runner = runner_with_leader(&tools, "echo gone >&2\nexit 3\n")?;
+    let large = "x".repeat(LARGER_THAN_A_PIPE);
+
+    assert_matches!(
+        run_or_give_up(runner, scenario(&["fail", &large], "")?)?,
+        Err(Error::Session { message }) if message == "exit status: 3: gone"
+    );
+
+    Ok(())
+}
+
+// The runner writes the request on a separate thread. A write on the runner's
+// thread would block once the pipe is full, before the runner sees the stop.
+#[test]
+fn a_leader_that_stops_before_it_reads_the_request_is_reported()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let runner = runner_with_leader(&tools, "kill -STOP $$\n")?;
+    let large = "x".repeat(LARGER_THAN_A_PIPE);
+
+    assert_matches!(
+        run_or_give_up(runner, scenario(&["fail", &large], "")?)?,
+        Err(Error::LeaderStopped(signal)) if signal == "SIGSTOP"
+    );
+
+    Ok(())
+}
