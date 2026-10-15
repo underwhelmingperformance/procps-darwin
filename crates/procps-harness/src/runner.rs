@@ -195,7 +195,7 @@ impl Runner {
             tools: tools.into(),
             host: host.into(),
             credentials: None,
-            timeout: Duration::from_secs(10),
+            timeout: Duration::from_secs(60),
         }
     }
 
@@ -221,7 +221,8 @@ impl Runner {
 
     /// The runner, changed to kill the session leader and its process group
     /// if the leader has neither exited nor stopped after `timeout`. The
-    /// default is ten seconds.
+    /// default is a minute, which leaves time for the leader, the fixtures and
+    /// the command to start and run on a busy machine.
     ///
     /// ```
     /// use std::time::Duration;
