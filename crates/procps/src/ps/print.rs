@@ -16,7 +16,9 @@ use std::{
 };
 
 use darwin_proc::{CalendarTime, Status, TaskInfo};
-use procps_core::{Charset, FieldGroup, LinuxPolicy, LinuxPriority, LinuxTask, Process, Snapshot};
+use procps_core::{
+    Charset, FieldGroup, LinuxPolicy, LinuxPriority, LinuxTask, Process, Snapshot, helper::Caller,
+};
 
 use crate::{
     linux::{self, Clock},
@@ -217,6 +219,7 @@ pub(crate) struct Context<'a> {
     /// The identity of every process, which the session columns search for
     /// another member of a zombie's process group.
     identities: &'a Snapshot,
+    caller: Caller,
     clock: Clock,
     /// The time that `ps` started listing, in seconds since the Unix epoch
     /// (`seconds_since_1970`).
@@ -236,6 +239,9 @@ pub(crate) struct Context<'a> {
 /// The settings of a [`Context`] that come from the options and the system.
 #[derive(Clone, Debug)]
 pub(crate) struct Settings {
+    /// The effective user and group of `ps`, which decide whether it may see
+    /// the values that Linux shows only to a process's owner and to root.
+    pub(crate) caller: Caller,
     /// The locale's character encoding.
     pub(crate) charset: Charset,
     /// The options that change how columns show their values.
@@ -266,6 +272,7 @@ impl<'a> Context<'a> {
 
         Self {
             identities,
+            caller: settings.caller,
             clock: Clock::new(snapshot),
             now,
             charset: settings.charset,
@@ -715,8 +722,8 @@ impl Printer {
 
                 Cell::text(format!("{:2}.{}", permille / 10, permille % 10))
             }
-            Self::Trs | Self::Tsiz => region_cell(process, true),
-            Self::Drs | Self::Dsiz => region_cell(process, false),
+            Self::Trs | Self::Tsiz => region_cell(context, process, true),
+            Self::Drs | Self::Dsiz => region_cell(context, process, false),
             Self::Swapable if has_no_memory(process) => Cell::text(*b"0"),
             Self::Swapable => process
                 .linux_sizes()
@@ -1000,9 +1007,20 @@ fn has_no_memory(process: &Process) -> bool {
 
 /// The size of the code of `process`, or with `text` false the rest of its
 /// virtual size, in KiB, as procps-ng's `pr_trs` and `pr_drs` print them.
-fn region_cell(process: &Process, text: bool) -> Cell {
+/// Linux reports both bounds of the code as 1 to a caller that may not read
+/// the process's private values, so the code is 0 and the rest is the whole
+/// virtual size.
+fn region_cell(context: &Context<'_>, process: &Process, text: bool) -> Cell {
     if has_no_memory(process) {
         return Cell::text(*b"0");
+    }
+
+    if !context.caller.may_read_private(&process.info) {
+        if text {
+            return Cell::text(*b"0");
+        }
+
+        return size_cell(process, |(virtual_size, _)| virtual_size >> 10);
     }
 
     let sizes = process.linux_sizes();
@@ -1135,7 +1153,8 @@ pub(crate) mod tests {
     };
     use pretty_assertions::assert_eq;
     use procps_core::{
-        Charset, Field, Process, Snapshot, System, Usage,
+        Charset, Field, Process, RegionTotals, Snapshot, System, Usage,
+        helper::Caller,
         testing::{process, thread},
     };
     use rstest::rstest;
@@ -1290,6 +1309,7 @@ pub(crate) mod tests {
     /// The settings for a test, in UTF-8 with times in UTC.
     pub(crate) fn settings(modifiers: Modifiers) -> Settings {
         Settings {
+            caller: Caller::new(Uid::from(0), Gid::from(0)),
             charset: Charset::Utf8,
             modifiers,
             date_format: None,
@@ -1611,6 +1631,47 @@ pub(crate) mod tests {
             .collect();
 
         assert_eq!(printed, ["-", "-", "-", "-", "-Ns+", "-", "[sleep]", "-"]);
+    }
+
+    /// [`sleeper`], whose real, effective and saved IDs are all `uid` and
+    /// `gid`, with 64 KiB of code in executable regions and 1 MiB of private
+    /// writable regions.
+    fn owned_by(uid: u32, gid: u32) -> Process {
+        let mut process = sleeper();
+        let credentials = &mut process.info.credentials;
+
+        [credentials.ruid, credentials.euid, credentials.svuid] = [Uid::from(uid); 3];
+        [credentials.rgid, credentials.egid, credentials.svgid] = [Gid::from(gid); 3];
+        process.region_totals = Some(Field::Available(RegionTotals {
+            executable: 64 << 10,
+            private_writable: 1 << 20,
+        }));
+
+        process
+    }
+
+    // Linux shows the bounds of a process's code only to a caller that passes
+    // its ptrace read-access check, and reports both bounds as 1 otherwise.
+    #[rstest]
+    #[case::owner(owned_by(501, 20), ["64", "4194240", "64", "4194240"])]
+    #[case::other_user(owned_by(502, 20), ["0", "4194304", "0", "4194304"])]
+    #[case::other_group(owned_by(501, 12), ["0", "4194304", "0", "4194304"])]
+    #[case::mixed_ids(sleeper(), ["0", "4194304", "0", "4194304"])]
+    fn only_a_process_that_ps_may_read_shows_its_code(
+        #[case] process: Process,
+        #[case] expected: [&str; 4],
+    ) {
+        let settings = Settings {
+            caller: Caller::new(Uid::from(501), Gid::from(20)),
+            ..settings(Modifiers::empty())
+        };
+        let printed = ["trs", "drs", "tsiz", "dsiz"].map(|name| {
+            let cell = printed(name, process.clone(), 1_000, settings.clone());
+
+            String::from_utf8(cell.bytes).expect("the text is UTF-8")
+        });
+
+        assert_eq!(printed, expected);
     }
 
     #[test]

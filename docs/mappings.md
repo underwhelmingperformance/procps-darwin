@@ -200,10 +200,11 @@ in `statm`, which `top` uses. Darwin does not report how many processes share
 each resident page, so the tools cannot compute a proportional set size, and
 `pss` shows `-`.
 
-Linux hides `start_code` and `end_code` in `/proc/<pid>/stat` from a caller that
-fails ptrace's read-access check, and procps-ng then shows `trs` as 0 and `drs`
-as the whole virtual size. `ps` will do the same for a process whose private
-values the caller may not read.
+Linux reports `start_code` and `end_code` in `/proc/<pid>/stat` as 1 to a caller
+that fails ptrace's read-access check, so procps-ng then shows `trs` and `tsiz`
+as 0 and `drs` and `dsiz` as the whole virtual size. `ps` does the same when the
+helper's access policy denies the effective user and group of `ps` access to the
+process's private values, even if the helper has sent the region totals.
 
 ## Executable path
 
