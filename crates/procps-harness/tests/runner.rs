@@ -34,6 +34,17 @@ const TOOLS: &[(&str, &str)] = &[
     ),
     ("stop-leader", "kill -STOP \"$1\"\n"),
     ("stop-self", "kill -STOP $$\n"),
+    // The subshell keeps forking, and it writes a line to the FIFO `$3` once
+    // its loop has started. The command stops the leader only after it has read
+    // that line.
+    (
+        "fork-and-stop-leader",
+        "echo \"$1\" >\"$2\"\n\
+         (while :; do /bin/sleep 60 & p=$!; [ -n \"$q\" ] && kill \"$q\"; q=$p; \
+         [ -n \"$told\" ] || { told=1; echo >\"$3\"; }; done) &\n\
+         read line <\"$3\"\n\
+         kill -STOP \"$1\"\nwait\n",
+    ),
     ("kill-leader", "kill -TERM \"$1\"\n"),
     (
         "leave-behind",
@@ -194,6 +205,9 @@ fn living(which: impl Fn(&ProcessInfo) -> bool) -> Result<Vec<Pid>, RecordError>
         .map(|info| info.pid)
         .collect())
 }
+
+// These tests check that no process in the run's process group is alive when
+// `run` returns.
 
 #[rstest]
 #[case::fixture(&["record", "{a1}"])]
@@ -538,6 +552,39 @@ fn a_run_that_takes_too_long_is_stopped(
         run_or_give_up(runner, scenario(command, FIXTURES)?)?,
         Err(Error::Timeout { after }) if after == timeout
     );
+
+    Ok(())
+}
+
+// XNU's `killpg` misses a child that a member forks during the call. The
+// command keeps forking while the runner kills the leader's process group, so
+// a single kill leaves a process in the group in some runs.
+#[test]
+fn no_process_outlives_a_run_whose_command_keeps_forking() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tools = Tools::new()?;
+    let record = tools.directory.path().join("session");
+    let forking = tools.directory.path().join("forking");
+    nix::unistd::mkfifo(
+        &forking,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )?;
+    let command = [
+        "fork-and-stop-leader",
+        "{session}",
+        path_text(&record)?,
+        path_text(&forking)?,
+    ];
+
+    for _ in 0..5 {
+        assert_matches!(
+            run_or_give_up(tools.runner.clone(), scenario(&command, FIXTURES)?)?,
+            Err(Error::LeaderStopped(signal)) if signal == "SIGSTOP"
+        );
+        let session = recorded_pid(&record)?;
+
+        assert_eq!(living(|info| info.pgid == session)?, []);
+    }
 
     Ok(())
 }

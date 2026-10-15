@@ -72,10 +72,50 @@ fn join(reader: Reader) -> Result<Vec<u8>, Error> {
         .map_err(Error::ReadLeader)
 }
 
-/// Sends `SIGKILL` to every process in the process group `group`. The group
-/// does not exist before the leader calls `setsid`, and `killpg` then fails
-/// with `ESRCH`. It fails with `EPERM` when the remaining members belong to a
-/// user that the runner may not signal, and those processes keep running.
+/// How long [`kill_group`] goes on killing a process group whose members are
+/// still alive.
+#[cfg(target_os = "macos")]
+const GROUP_KILL_LIMIT: Duration = Duration::from_secs(10);
+
+/// Sends `SIGKILL` to every process in the process group `group`.
+///
+/// XNU's `killpg` signals the members of the group that it finds when the call
+/// starts, so a child that a member forks during the call survives it. The kill
+/// is therefore repeated until `killpg` fails or [`GROUP_KILL_LIMIT`] passes.
+/// `killpg` fails with `ESRCH` when the group does not exist, for example
+/// before the leader calls `setsid`. It fails with `EPERM` once only zombies,
+/// such as the unreaped leader, remain, and also when the remaining members
+/// belong to a user that the runner may not signal. Those processes keep
+/// running.
+#[cfg(target_os = "macos")]
+fn kill_group(group: Pid) -> Result<(), Error> {
+    let deadline = std::time::Instant::now() + GROUP_KILL_LIMIT;
+
+    loop {
+        match rustix::process::kill_process_group(group, Signal::KILL) {
+            Ok(()) => {}
+            Err(Errno::SRCH | Errno::PERM) => return Ok(()),
+            Err(errno) => return Err(Error::KillGroup(errno.into())),
+        }
+
+        if std::time::Instant::now() >= deadline {
+            return Err(Error::GroupSurvived {
+                group: group.as_raw_nonzero().get(),
+                after: GROUP_KILL_LIMIT,
+            });
+        }
+
+        std::thread::yield_now();
+    }
+}
+
+/// Sends `SIGKILL` to every process in the process group `group`.
+///
+/// Linux delivers a group signal that arrives during a `fork` to the new child
+/// as well, or abandons the fork when the signal is fatal, so one kill reaches
+/// every member. Linux also accepts a kill of a group whose only member is the
+/// unreaped leader, so repeating the kill until it fails would never end.
+#[cfg(not(target_os = "macos"))]
 fn kill_group(group: Pid) -> Result<(), Error> {
     match rustix::process::kill_process_group(group, Signal::KILL) {
         Ok(()) | Err(Errno::SRCH | Errno::PERM) => Ok(()),

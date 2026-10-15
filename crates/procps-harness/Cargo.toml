@@ -35,3 +35,4 @@ rstest.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 darwin-proc.workspace = true
+nix.workspace = true
