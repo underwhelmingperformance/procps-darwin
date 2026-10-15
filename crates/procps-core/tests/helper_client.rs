@@ -6,7 +6,7 @@
 
 use std::{
     ffi::OsString,
-    io::{self, Write},
+    io::{self, Read, Write},
     os::unix::{
         ffi::OsStringExt,
         net::{UnixListener, UnixStream},
@@ -30,8 +30,18 @@ use procps_core::{
 use rstest::rstest;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
-/// How long a test client waits for the fake helper.
-const PATIENCE: Duration = Duration::from_millis(500);
+/// How long a test client waits for the fake helper, and the fake helper for
+/// the client. A working exchange finishes long before this.
+const PATIENCE: Duration = Duration::from_secs(30);
+
+/// How long a client waits for a helper that stalls.
+const SHORT_PATIENCE: Duration = Duration::from_millis(100);
+
+/// How long a helper that stalls waits for the client to close the
+/// connection. It is well below the client's default timeout of 30 seconds, so
+/// a client that waits for that timeout, and not for [`SHORT_PATIENCE`], makes
+/// the fake helper fail.
+const STALL_LIMIT: Duration = Duration::from_secs(5);
 
 /// The snapshot that the fake helper sends.
 fn snapshot() -> Snapshot {
@@ -61,8 +71,9 @@ enum Behaviour {
     Close,
     /// Reads the request and sends these bytes.
     Send(Vec<u8>),
-    /// Reads the request and keeps the connection open for longer than the
-    /// client waits.
+    /// Reads the request and keeps the connection open until the client
+    /// closes it, or fails if the client has not closed it after
+    /// [`STALL_LIMIT`].
     Stall,
 }
 
@@ -71,6 +82,8 @@ enum Behaviour {
 enum FakeHelperError {
     #[error("the client did not connect in time")]
     NoConnection,
+    #[error("the client did not give up: {0}")]
+    ClientWaited(#[source] io::Error),
     #[error("the fake helper panicked")]
     Panicked,
     #[error(transparent)]
@@ -104,7 +117,12 @@ fn fake_helper(path: &Path, behaviour: Behaviour) -> io::Result<FakeHelper> {
         match behaviour {
             Behaviour::Respond(response) => stream.write_message(&response)?,
             Behaviour::Send(bytes) => stream.write_all(&bytes)?,
-            Behaviour::Stall => thread::sleep(PATIENCE * 2),
+            Behaviour::Stall => {
+                stream.set_read_timeout(Some(STALL_LIMIT))?;
+                stream
+                    .read_to_end(&mut Vec::new())
+                    .map_err(FakeHelperError::ClientWaited)?;
+            }
             Behaviour::Close | Behaviour::SendAtOnce(_) => {}
         }
 
@@ -126,12 +144,11 @@ fn finish_failed(helper: FakeHelper) -> Result<(), FakeHelperError> {
         .map_err(|_| FakeHelperError::Panicked)
 }
 
-/// Accepts one connection on `socket`, waiting at most four times the client's
-/// patience. The wait is bounded, so when a test's client fails before it
-/// connects, joining the fake helper returns, and the test reports the
-/// client's error.
+/// Accepts one connection on `socket`, waiting at most [`PATIENCE`]. The wait
+/// is bounded, so when a test's client fails before it connects, joining the
+/// fake helper returns, and the test reports the client's error.
 fn accept(socket: &UnixListener) -> Result<UnixStream, FakeHelperError> {
-    let wait = Timespec::try_from(PATIENCE * 4)?;
+    let wait = Timespec::try_from(PATIENCE)?;
     let mut ready = [PollFd::new(socket, PollFlags::IN)];
 
     if poll(&mut ready, Some(&wait))? == 0 {
@@ -267,11 +284,6 @@ fn large_request() -> SnapshotRequest {
     SnapshotRequest::default(),
     Failure::TooLarge
 )]
-#[case::stalled(
-    Behaviour::Stall,
-    SnapshotRequest::default(),
-    Failure::Io(io::ErrorKind::TimedOut)
-)]
 fn a_failed_exchange_is_an_error(
     #[case] behaviour: Behaviour,
     #[case] request: SnapshotRequest,
@@ -285,6 +297,24 @@ fn a_failed_exchange_is_an_error(
     finish_failed(helper)?;
 
     assert_eq!(failure, Some(expected));
+
+    Ok(())
+}
+
+#[test]
+fn a_client_stops_waiting_for_a_helper_that_stalls() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("socket");
+    let helper = fake_helper(&path, Behaviour::Stall)?;
+
+    let failure = client(&path)?
+        .patience(SHORT_PATIENCE)
+        .snapshot(&SnapshotRequest::default())
+        .err()
+        .map(Failure::from);
+    finish(helper)?;
+
+    assert_eq!(failure, Some(Failure::Io(io::ErrorKind::TimedOut)));
 
     Ok(())
 }
