@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Runs scenarios against small shell scripts, using this package's binary for
-//! the session leader and the fixture processes.
+//! the session leader and the fixture processes. The tests read the process
+//! table with darwin-proc, so they run on macOS only.
+#![cfg(target_os = "macos")]
 
-use std::{collections::BTreeMap, os::unix::fs::PermissionsExt};
+use std::{
+    collections::BTreeMap,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+};
 
 use assert_matches::assert_matches;
+use darwin_proc::{Pid, ProcessInfo, Status};
 use pretty_assertions::assert_eq;
 use procps_harness::{Error, FixtureEnd, Generation, Outcome, Runner, Scenario, ScenarioFile};
 use rstest::rstest;
@@ -138,6 +145,48 @@ fn a_scenario_records_what_its_command_did(
     Ok(())
 }
 
+/// A temporary path that is not UTF-8, which a test cannot pass to a command.
+#[derive(Debug, thiserror::Error)]
+#[error("the path {0:?} is not UTF-8")]
+struct PathNotUtf8(PathBuf);
+
+/// The text of `path`, to pass to a command.
+fn path_text(path: &Path) -> Result<&str, PathNotUtf8> {
+    path.to_str().ok_or_else(|| PathNotUtf8(path.to_owned()))
+}
+
+/// Why a test cannot tell whether recorded processes have exited.
+#[derive(Debug, thiserror::Error)]
+enum RecordError {
+    #[error("cannot read the recorded pid")]
+    Unreadable(#[source] std::io::Error),
+    #[error("the record {0:?} is not a pid")]
+    NotAPid(String),
+    #[error("cannot read the process table")]
+    Processes(#[from] darwin_proc::Error),
+}
+
+/// The pid in the file `record`.
+fn recorded_pid(record: &Path) -> Result<Pid, RecordError> {
+    let text = std::fs::read_to_string(record).map_err(RecordError::Unreadable)?;
+    let pid = text
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| RecordError::NotAPid(text.clone()))?;
+
+    Ok(Pid::from(pid))
+}
+
+/// The processes that have not exited, of those that `which` selects. A
+/// zombie has exited.
+fn living(which: impl Fn(&ProcessInfo) -> bool) -> Result<Vec<Pid>, RecordError> {
+    Ok(ProcessInfo::all()?
+        .into_iter()
+        .filter(|info| which(info) && info.status != Status::Zombie)
+        .map(|info| info.pid)
+        .collect())
+}
+
 #[rstest]
 #[case::fixture(&["record", "{a1}"])]
 #[case::process_left_by_the_command(&["leave-behind"])]
@@ -145,18 +194,12 @@ fn no_process_outlives_its_run(#[case] command: &[&str]) -> Result<(), Box<dyn s
     let tools = Tools::new()?;
     let record = tools.directory.path().join("pid");
     let mut command = command.to_vec();
-    command.push(record.to_str().ok_or("path is not UTF-8")?);
+    command.push(path_text(&record)?);
 
     tools.runner.run(&scenario(&command, FIXTURES)?)?;
+    let pid = recorded_pid(&record)?;
 
-    let pid = std::fs::read_to_string(&record)?;
-    let alive = std::process::Command::new("/bin/kill")
-        .args(["-0", pid.trim()])
-        .stderr(std::process::Stdio::null())
-        .status()?
-        .success();
-
-    assert!(!alive, "process {} is still running", pid.trim());
+    assert_eq!(living(|info| info.pid == pid)?, []);
 
     Ok(())
 }

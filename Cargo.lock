@@ -444,6 +444,7 @@ version = "0.1.0"
 dependencies = [
  "assert_matches",
  "clap",
+ "darwin-proc",
  "derive_more",
  "pretty_assertions",
  "regex",
