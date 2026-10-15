@@ -15,6 +15,7 @@ mod error;
 mod ffi;
 mod files;
 mod info;
+mod kill;
 mod libproc;
 mod locale;
 mod path;
