@@ -211,7 +211,11 @@ process's private values, even if the helper has sent the region totals.
 Linux guards `/proc/<pid>/exe` with ptrace's read-access check, so procps-ng's
 `exe` column shows `-` for a process that the caller may not read. macOS gives
 every user the path through `proc_pidpath`, and the helper passes it on, but
-`ps` will show `-` in the same cases as Linux.
+`ps` shows `-` when the helper's access policy would withhold the process's
+private values from the effective user and group of `ps`. Linux adds `(deleted)`
+to the path of an executable that has been removed, whereas `proc_pidpath` fails
+for such a process on Darwin, so `exe` shows `-`. A zombie's path is also `-`,
+as on Linux, because `proc_pidpath` fails for it.
 
 ## Command names
 
@@ -254,12 +258,67 @@ can read the command line of every process apart from `kernel_task`.
 
 ## Environment
 
-`pgrep --env` reads each process's environment from `KERN_PROCARGS2`. macOS 27
-withholds the environment of an Apple platform binary, such as `/bin/sleep` or
-`/bin/sh`, from every process except the binary itself, and the tools treat that
-environment as unreadable. `pgrep --env` therefore never selects a platform
-binary on macOS 27. On Linux, a process's owner can read its environment from
-`/proc/<pid>/environ`, so procps-ng selects it.
+`pgrep --env` and `ps`'s `environ` column read each process's environment from
+`KERN_PROCARGS2`. `environ` joins the variables with spaces, as procps-ng joins
+the strings of `/proc/<pid>/environ`. macOS 27 withholds the environment of an
+Apple platform binary, such as `/bin/sleep` or `/bin/sh`, from every process
+except the binary itself, and the tools treat that environment as unreadable.
+`pgrep --env` therefore never selects a platform binary on macOS 27, and
+`environ` shows `-` for it. On Linux, a process's owner can read its environment
+from `/proc/<pid>/environ`, so procps-ng selects it and shows it.
+
+## Groups
+
+`ps`'s `supgid` and `supgrp` columns show Linux's `Groups` list from
+`/proc/<pid>/status`, which is the list that `getgroups` returns. The tools use
+the group list in the credentials that `kinfo_proc` reports, which is the same
+list on Darwin. Darwin keeps the effective group ID as the first entry, so the
+list always contains it, whereas a Linux process that has cleared its
+supplementary groups has an empty list. Linux sorts the list when a process sets
+it, and Darwin keeps the order in which it was set, so the tools sort the IDs in
+ascending order. `kinfo_proc` has room for 16 groups, so a longer list is cut to
+its first 16 entries.
+
+## Open files
+
+`ps`'s `fds` column shows the number of open file descriptors, which procps-ng
+reads as the size of `/proc/<pid>/fd`. Linux 6.2 and later report that size to
+every user who calls `stat` on the directory, although only the process's owner
+may list it. The tools count the descriptors that `PROC_PIDLISTFDS` lists. The
+helper sends the count to every user, and the descriptors themselves only to the
+owner and to root. Without the helper, `PROC_PIDLISTFDS` fails for another
+user's process, and `fds` shows `-`. A zombie has closed its descriptors, and
+Darwin does not list them, so `fds` shows 0 for it.
+
+## Disk I/O
+
+`ps`'s `rbytes` and `wbytes` columns show `read_bytes` and `write_bytes` from
+`/proc/<pid>/io`: the bytes that a process caused to be read from and written to
+storage, including those of the children that it has waited for. The tools use
+`ri_diskio_bytesread` and `ri_diskio_byteswritten` from `proc_pid_rusage`, which
+count the process's own disk I/O and leave out its children's. Linux guards `io`
+with ptrace's read-access check, and the helper sends the counts only to the
+owner and to root. Darwin does not count the characters that a process reads and
+writes, its read and write calls, or its cancelled writes, so `rchars`,
+`wchars`, `rops`, `wops` and `wcbytes` show `-`.
+
+## Resource limits
+
+`ps`'s `lim` column shows the limit on the resident size, `RLIMIT_RSS`, from
+`/proc/<pid>/stat`. macOS has the limit, but no call reads another process's
+limits, so `lim` shows `-`.
+
+## CPU time of reaped children
+
+Linux reports the CPU time of the children that a process has waited for as
+`cutime` and `cstime` in `/proc/<pid>/stat`. procps-ng's `cuc` column adds them
+to the process's own `utime` and `stime`, and shows the sum as a percentage of
+the time since the process started. Its `cutime` sort key adds only the user
+times, `utime` and `cutime`. The tools use `ri_child_user_time` and
+`ri_child_system_time` from `proc_pid_rusage`. Darwin adds a child's times when
+the child is reaped. Linux does so only when the parent waits for the child,
+whereas Darwin also adds the times of a child that is reaped automatically
+because the parent ignores `SIGCHLD`.
 
 ## Sessions
 
@@ -348,6 +407,18 @@ order of names and command lines can differ from Linux's. A value that the
 source could not read, such as another user's CPU time without the helper, sorts
 as a value lower than every other value: first in ascending order and last in
 descending order.
+
+Some of procps-ng's placeholders print `-` but sort by a value from Linux's
+`status` or `statm` files. `resident` and `m_resident` sort by the resident size
+in pages, from `pti_resident_size`. `vm_exe` sorts by the size of the executable
+regions in KiB, which `trs` shows. Linux shows `VmExe` in `status` to every
+user, so `vm_exe` sorts by that size even for a process whose `trs` shows 0.
+`vm_lock` sorts by the wired size, `ri_wired_size` from `proc_pid_rusage`, which
+approximates Linux's locked memory, `VmLck`. Darwin wires the pages that a
+process locks with `mlock`, but it also counts other wired memory of the
+process. The tools do not approximate the sizes of the data, the stack and the
+libraries, or the shared pages, so `vm_data`, `vm_stack`, `vm_lib` and `m_share`
+give every process the same value, as does `lim`.
 
 ## Character widths
 

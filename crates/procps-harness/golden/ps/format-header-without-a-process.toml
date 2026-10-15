@@ -1,0 +1,8 @@
+status = 1
+stdout = """
+EXE                         ENVIRONMENT                     FDS   LIM SUPGID               SUPGRP                                     USS RBYTES WBYTES  %CUC   PID
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
