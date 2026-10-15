@@ -11,7 +11,7 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::mpsc,
+    sync::mpsc::{self, RecvTimeoutError},
     thread::JoinHandle,
     time::Duration,
 };
@@ -61,11 +61,33 @@ fn read_all(stream: Option<impl Read>) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// A thread from [`read_in_background`].
+type Reader = JoinHandle<std::io::Result<Vec<u8>>>;
+
+/// Waits for a thread from [`read_in_background`], and returns what it read.
+fn join(reader: Reader) -> Result<Vec<u8>, Error> {
+    reader
+        .join()
+        .map_err(|_| Error::ReaderPanicked)?
+        .map_err(Error::ReadLeader)
+}
+
+/// Sends `SIGKILL` to every process in the process group `group`. The group
+/// does not exist before the leader calls `setsid`, and `killpg` then fails
+/// with `ESRCH`. It fails with `EPERM` when the remaining members belong to a
+/// user that the runner may not signal, and those processes keep running.
+fn kill_group(group: Pid) -> Result<(), Error> {
+    match rustix::process::kill_process_group(group, Signal::KILL) {
+        Ok(()) | Err(Errno::SRCH | Errno::PERM) => Ok(()),
+        Err(errno) => Err(Error::KillGroup(errno.into())),
+    }
+}
+
 /// Reads everything from `stream` on another thread.
-fn read_in_background(
-    stream: Option<impl Read + Send + 'static>,
-) -> JoinHandle<std::io::Result<Vec<u8>>> {
-    std::thread::spawn(move || read_all(stream))
+fn read_in_background(stream: Option<impl Read + Send + 'static>) -> Result<Reader, Error> {
+    std::thread::Builder::new()
+        .spawn(move || read_all(stream))
+        .map_err(Error::WatchThread)
 }
 
 /// The most attempts at one run. A run starts again when one of its processes
@@ -144,9 +166,9 @@ impl Runner {
         }
     }
 
-    /// The runner, changed to kill every process in a scenario's session if
-    /// the session leader has not finished after `timeout`. The default is ten
-    /// seconds.
+    /// The runner, changed to kill the session leader and its process group
+    /// if the leader has neither exited nor stopped after `timeout`. The
+    /// default is ten seconds.
     ///
     /// ```
     /// use std::time::Duration;
@@ -288,8 +310,9 @@ impl Runner {
     /// # Errors
     ///
     /// Returns an error if a process cannot be started, the command does not
-    /// finish in time, the command signals a decoy, or a signal terminates or
-    /// stops the session leader.
+    /// finish in time, the command signals a decoy, a signal terminates or
+    /// stops the session leader, or the runner cannot watch, read from or kill
+    /// the session leader.
     pub fn run(&self, scenario: &Scenario) -> Result<Outcome, Error> {
         self.run_with(scenario, true)
     }
@@ -362,7 +385,7 @@ impl Runner {
                 stdin.write_all(text.as_bytes()).map_err(io_error)?;
             }
 
-            let (status, stdout, stderr) = match self.wait_for_session(child).map_err(io_error)? {
+            let (status, stdout, stderr) = match self.wait_for_session(child)? {
                 SessionEnd::Finished {
                     status,
                     stdout,
@@ -404,53 +427,71 @@ impl Runner {
 
     /// Waits until the session leader exits or stops, or the timeout passes,
     /// then sends `SIGKILL` to the leader and to its process group.
-    fn wait_for_session(&self, mut leader: Child) -> std::io::Result<SessionEnd> {
+    fn wait_for_session(&self, mut leader: Child) -> Result<SessionEnd, Error> {
         let pid = Pid::from_child(&leader);
-        let stdout = read_in_background(leader.stdout.take());
-        let stderr = read_in_background(leader.stderr.take());
         let (sender, receiver) = mpsc::channel();
+        let start = || -> Result<(Reader, Reader), Error> {
+            let stdout = read_in_background(leader.stdout.take())?;
+            let stderr = read_in_background(leader.stderr.take())?;
 
-        // `NOWAIT` leaves the leader unreaped, so its pid cannot belong to
-        // another process until `leader.wait` below. Darwin reports a stop
-        // even without `STOPPED`, but Linux reports one only with it.
-        std::thread::spawn(move || {
-            let changed = loop {
-                match rustix::process::waitid(
-                    WaitId::Pid(pid),
-                    WaitIdOptions::EXITED | WaitIdOptions::STOPPED | WaitIdOptions::NOWAIT,
-                ) {
-                    Err(Errno::INTR) => {}
-                    changed => break changed,
-                }
-            };
-            let _ = sender
-                .send(changed.map(|change| change.and_then(|change| change.stopping_signal())));
-        });
+            // `NOWAIT` leaves the leader unreaped, so its pid cannot belong to
+            // another process until `leader.wait` below. Darwin reports a stop
+            // even without `STOPPED`, but Linux reports one only with it.
+            std::thread::Builder::new()
+                .spawn(move || {
+                    let changed = loop {
+                        match rustix::process::waitid(
+                            WaitId::Pid(pid),
+                            WaitIdOptions::EXITED | WaitIdOptions::STOPPED | WaitIdOptions::NOWAIT,
+                        ) {
+                            Err(Errno::INTR) => {}
+                            changed => break changed,
+                        }
+                    };
+                    let _ = sender.send(
+                        changed.map(|change| change.and_then(|change| change.stopping_signal())),
+                    );
+                })
+                .map_err(Error::WatchThread)?;
 
-        let waited = receiver.recv_timeout(self.timeout);
+            Ok((stdout, stderr))
+        };
+        let threads = start();
+        let waited = threads
+            .as_ref()
+            .ok()
+            .map(|_| receiver.recv_timeout(self.timeout));
 
         // The leader calls `setsid` itself, so the timeout can pass before its
         // process group exists. The leader is killed first, so that it cannot
-        // create the group after the group is killed.
-        let _ = rustix::process::kill_process(pid, Signal::KILL);
-        let _ = rustix::process::kill_process_group(pid, Signal::KILL);
+        // create the group after the group is killed. If the kill fails,
+        // return without reaping the leader, because `leader.wait` would block
+        // until the leader exits.
+        let leader_killed = rustix::process::kill_process(pid, Signal::KILL);
+        let group_killed = kill_group(pid);
+        leader_killed.map_err(|errno| Error::KillLeader(errno.into()))?;
 
         // The waiting thread returns once the leader has died. Waiting for it
         // here keeps it from calling `waitid` after the leader is reaped, when
         // the pid can belong to another child of the runner.
-        if waited.is_err() {
+        if waited == Some(Err(RecvTimeoutError::Timeout)) {
             let _ = receiver.recv();
         }
 
-        let status = leader.wait()?;
-        let stdout = stdout.join().unwrap_or_else(|_| Ok(Vec::new()))?;
-        let stderr = stderr.join().unwrap_or_else(|_| Ok(Vec::new()))?;
+        let status = leader.wait();
+        group_killed?;
+        let status = status.map_err(Error::WaitLeader)?;
+        let (stdout, stderr) = threads?;
+        let stdout = join(stdout)?;
+        let stderr = join(stderr)?;
 
-        let Ok(changed) = waited else {
-            return Ok(SessionEnd::TimedOut);
+        let stopped = match waited {
+            Some(Ok(changed)) => changed.map_err(|errno| Error::WaitLeader(errno.into()))?,
+            Some(Err(RecvTimeoutError::Timeout)) => return Ok(SessionEnd::TimedOut),
+            Some(Err(RecvTimeoutError::Disconnected)) | None => return Err(Error::WaiterLost),
         };
 
-        if let Some(signal) = changed? {
+        if let Some(signal) = stopped {
             return Ok(SessionEnd::Stopped(signal::name(signal)));
         }
 
