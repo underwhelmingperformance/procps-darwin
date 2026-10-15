@@ -22,10 +22,17 @@ workspace = true
 libtest-mimic.workspace = true
 pretty_assertions.workspace = true
 procps-harness.workspace = true
-thiserror.workspace = true
+rstest.workspace = true
+tempfile.workspace = true
 
 # The reference test has its own `main`, so that its binary can also run as the
 # harness's session leader and fixture processes.
 [[test]]
 name = "reference"
 harness = false
+
+[dependencies]
+darwin-proc.workspace = true
+libc.workspace = true
+rustix.workspace = true
+thiserror.workspace = true

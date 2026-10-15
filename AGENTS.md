@@ -127,10 +127,19 @@ exporter.
 
 ## Output
 
-- Write through a locked, buffered handle to standard output.
-- The tools restore the default `SIGPIPE` disposition at start-up, so a closed
-  pipe (`ps aux | head`) terminates them silently, as it terminates procps-ng.
-  With Rust's default of ignoring `SIGPIPE`, `println!` panics instead.
+- Write through `procps::output::Output`. It buffers standard output as C does
+  and calls `write(2)` itself, because Rust's standard streams treat `EBADF` as
+  a success.
+- Before `main` runs, Rust's runtime ignores `SIGPIPE` and opens `/dev/null` in
+  place of a standard stream that is closed. The tools call
+  `darwin_proc::restore_inherited_state` at start-up. It restores the `SIGPIPE`
+  disposition that the tool inherited, so a closed pipe (`ps aux | head`)
+  terminates the tools silently, as it terminates procps-ng, unless the parent
+  ignores `SIGPIPE`. It also replaces a standard output or standard error that
+  was closed with `/dev/null` opened for reading only, so that writes to it fail
+  with `EBADF`. `Output` fails writes to the stream with the lowest closed
+  descriptor with `EINVAL` instead, as a write to procps-ng's epoll descriptor
+  fails.
 - The helper client sets `SO_NOSIGPIPE` on its socket, so a helper that closes
   the connection causes an error in the client, not a `SIGPIPE`.
 
