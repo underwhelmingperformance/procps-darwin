@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "-L with m cannot be combined with a format list"
+command = ["ps", "-L", "m", "-o", "pid"]

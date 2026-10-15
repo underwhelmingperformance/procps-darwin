@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "the bsd personality reads -o as BSD's o"
+command = ["ps", "-o"]
+
+[environment]
+PS_PERSONALITY = "bsd"

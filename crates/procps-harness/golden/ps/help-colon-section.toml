@@ -1,0 +1,40 @@
+status = 0
+stdout = """
+
+Usage:
+ ps [options]
+
+Output formats:
+ -D <format>          date format for lstart
+ -F                   extra full
+ -f                   full-format, including command lines
+  f, --forest         ascii art process tree
+ -H                   show process hierarchy
+ -j                   jobs format
+  j                   BSD job control format
+ -l                   long format
+  l                   BSD long format
+ -M, Z                add security data (for SELinux)
+ -O <format>          preloaded with default columns
+  O <format>          as -O, with BSD personality
+ -o, o, --format <format>
+                      user-defined format
+  -P                  add psr column
+  s                   signal format
+  u                   user-oriented format
+  v                   virtual memory format
+  X                   register format
+ -y                   do not show flags, show rss vs. addr (used with -l)
+     --context        display security context (for SELinux)
+     --delimiter <d>  Use <d> as a column delimiter instead of variable space
+     --headers        repeat header lines, one per page
+     --no-headers     do not print header at all
+     --cols, --columns, --width <num>
+                      set screen width
+     --rows, --lines <num>
+                      set screen height
+     --signames       display signal masks using signal names
+
+For more details see ps(1).
+"""
+stderr = ""

@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "the warning for PS_FORMAT reports the first unknown specifier of the run"
+command = ["ps", "-Op", "-q", "{session}", "--deselect"]
+
+[environment]
+PS_FORMAT = "bar"

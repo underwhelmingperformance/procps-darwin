@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "ps warns about a screen with fewer than 2 rows"
+command = ["ps", "--help"]
+
+[environment]
+LINES = "1"

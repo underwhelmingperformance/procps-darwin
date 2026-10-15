@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "ps warns about a PS_FORMAT that is not a format list"
+command = ["ps", "-q", "{session}", "-N"]
+
+[environment]
+PS_FORMAT = "bar"

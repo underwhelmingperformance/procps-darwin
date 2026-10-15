@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a list element with a 0b prefix is binary, so 0b0 is session 0, which is out of range"
+command = ["ps", "-s", "0b0"]

@@ -1183,6 +1183,11 @@ reports `write error: Bad file descriptor`. `procps::output::Output::new` gives
 procps-ng's `main` also installs handlers for most signals, which `ps` does not
 install yet.
 
+The reference scenarios in `scenarios/ps/` check the usage text, `ps L`, and the
+errors and warnings of the parser. The scenarios for `ps -aux` without a
+warning, `PS_FORMAT`, AIX formats, headers and BSD's sort codes are pending
+until `ps` lists processes.
+
 #### 5.2 Process selection
 
 Select processes with `-A`, `-e`, `-a`, `-d`, `-N`, `T`, `r`, `x`, `-C`, `-G`,

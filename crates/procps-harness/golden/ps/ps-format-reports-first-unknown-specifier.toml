@@ -1,0 +1,6 @@
+status = 1
+stdout = ""
+stderr = """
+warning: $PS_FORMAT ignored. (unknown user-defined format specifier "p")
+q/-q,--quick-pid cannot be used together with sort options.
+"""

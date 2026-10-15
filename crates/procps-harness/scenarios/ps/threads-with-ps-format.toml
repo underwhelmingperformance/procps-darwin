@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "PS_FORMAT cannot be used with -L and m"
+command = ["ps", "-L", "m"]
+
+[environment]
+PS_FORMAT = "pid"

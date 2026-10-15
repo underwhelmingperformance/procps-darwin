@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "in a UTF-8 locale, a long option may start with any letter"
+command = ["ps", "--é"]
+
+[environment]
+LC_ALL = "C.UTF-8"

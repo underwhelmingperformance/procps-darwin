@@ -1,0 +1,19 @@
+status = 0
+stdout = """
+
+Usage:
+ ps [options]
+
+Basic options:
+ -A, -e               all processes
+ -a                   all with tty, except session leaders
+  a                   all with tty, including other users
+ -d                   all except session leaders
+ -N, --deselect       negate selection
+  r                   only running processes
+  T                   all processes on this terminal
+  x                   processes without controlling ttys
+
+For more details see ps(1).
+"""
+stderr = ""

@@ -53,11 +53,14 @@ exporter.
   which sets `SPDX-FileCopyrightText = "NONE"` and CC0-1.0, and never annotate
   them with our copyright.
 
-- A golden file that contains the usage text of procps-ng's `pgrep` or `pkill`
-  has procps-ng's copyright holders and GPL-2.0-or-later, because the text comes
-  from procps-ng's source. List it in the procps-ng entry of `REUSE.toml`. The
-  `reuse` test in `procps-harness` fails when that list differs from the golden
-  files that contain the usage text.
+- A golden file with text from procps-ng's source has the copyright holders and
+  the licence of the procps-ng file that the text comes from. The usage text of
+  `pgrep` and `pkill` comes from `src/pgrep.c`, which is GPL-2.0-or-later. The
+  usage text of `ps` comes from `src/ps/help.c`, and the listing of `ps L` from
+  the table of format specifiers in `src/ps/output.c`, which are both
+  LGPL-2.1-or-later. List each golden file in the matching entry of
+  `REUSE.toml`. The `reuse` test in `procps-harness` fails when those entries
+  differ from the golden files with that text.
 - procps-ng is GPL-2.0-or-later, and its library is LGPL-2.1-or-later, so its
   code can be translated into this project. Check each file's licence header
   first: GPL-2.0-only code cannot be ported.

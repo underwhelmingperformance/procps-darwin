@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a header after = replaces the default header"
+pending = true
+command = ["ps", "-o", "pid=Process,comm=Name", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
