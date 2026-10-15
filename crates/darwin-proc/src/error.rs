@@ -6,7 +6,7 @@ use std::io;
 
 use crate::Pid;
 
-/// A call that reads process or system data from the kernel.
+/// A call to the kernel that reads process or system data, or sends a signal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, derive_more::Display)]
 #[non_exhaustive]
 pub enum Call {
@@ -84,9 +84,12 @@ pub enum Call {
     /// `launch_activate_socket`.
     #[display("launch_activate_socket")]
     LaunchdSockets,
+    /// `kill`, which sends a signal.
+    #[display("kill")]
+    Signal,
 }
 
-/// An error from reading process or system data.
+/// An error from a call to the kernel.
 ///
 /// The tools show each case differently. They leave an exited process out of
 /// their output, and show `-` for a denied read. Data that the kernel does not
@@ -100,7 +103,9 @@ pub enum Error {
         /// The process.
         pid: Pid,
     },
-    /// The caller may not read this data for this process.
+    /// The caller may not read this data for this process, or may not
+    /// signal it. [`Pid::send_signal`](crate::Pid::send_signal) also returns
+    /// this error for a pid of 0 or below, without calling `kill(2)`.
     #[error("{call} for process {pid}: permission denied")]
     Denied {
         /// The process.
