@@ -275,8 +275,27 @@ impl Process {
         Some(if task.running_threads > 0 { 'R' } else { 'S' })
     }
 
-    /// The number of threads, from the threads group or the usage group.
-    fn thread_count(&self) -> Option<usize> {
+    /// The number of threads, from the threads group or the usage group, or
+    /// `None` if the source read neither. A zombie has one thread, as on
+    /// Linux, although Darwin keeps none of its threads.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let mut process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    /// process.threads = Some(Field::Available(Pid::current().threads()?));
+    ///
+    /// assert!(process.thread_count().is_some_and(|count| count >= 1));
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn thread_count(&self) -> Option<usize> {
+        if self.info.status == Status::Zombie {
+            return Some(1);
+        }
+
         if let Some(Field::Available(threads)) = &self.threads {
             return Some(threads.len());
         }
@@ -292,7 +311,10 @@ impl Process {
     /// value. A fixed-priority process has its Darwin base priority as its
     /// real-time priority, limited to Linux's range of 1 to 99. Without the
     /// usage group, the policy is unknown, and the priority is that of
-    /// `SCHED_OTHER`.
+    /// `SCHED_OTHER`. Darwin has no task information for a zombie, whereas
+    /// Linux reports the policy that the process had before it exited. A
+    /// zombie has `SCHED_OTHER`, which most processes use, as an
+    /// approximation.
     ///
     /// ```
     /// use darwin_proc::Pid;
@@ -314,6 +336,14 @@ impl Process {
             nice,
             rt_priority: None,
         };
+
+        if self.info.status == Status::Zombie {
+            return LinuxPriority {
+                policy: Some(LinuxPolicy::Other),
+                rt_priority: Some(0),
+                ..other
+            };
+        }
 
         let Some(task) = self.usage.as_ref().and_then(|usage| usage.task.available()) else {
             return other;
@@ -485,7 +515,39 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    use crate::testing::{process, thread};
+    use crate::{
+        Field, LinuxPolicy, LinuxPriority, Usage,
+        testing::{process, thread},
+    };
+
+    // Darwin keeps neither the threads nor the task information of a zombie.
+    // Linux reports one thread for a zombie, and the policy that it had
+    // before it exited, which is usually `SCHED_OTHER`.
+    #[test]
+    fn a_zombie_has_one_thread_and_the_default_policy() {
+        let mut zombie = process(10, "worker");
+        zombie.info.status = Status::Zombie;
+        zombie.info.nice = 5;
+        zombie.threads = Some(Field::Failed);
+        zombie.usage = Some(Usage {
+            task: Field::Failed,
+            resources: Field::Unsupported,
+            counters: Field::Unsupported,
+        });
+
+        assert_eq!(
+            (zombie.thread_count(), zombie.linux_priority()),
+            (
+                Some(1),
+                LinuxPriority {
+                    policy: Some(LinuxPolicy::Other),
+                    priority: 25,
+                    nice: 5,
+                    rt_priority: Some(0),
+                }
+            )
+        );
+    }
 
     /// `P_TRACED` from `<sys/proc.h>`: a debugger is attached.
     const P_TRACED: u32 = 0x800;
