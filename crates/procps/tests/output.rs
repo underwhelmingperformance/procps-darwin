@@ -2,15 +2,16 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Checks how `pgrep` and `pkill` handle failed writes to standard output and
-//! standard error. The reference harness always connects both streams to
+//! Checks how `pgrep`, `pkill` and `ps` handle failed writes to standard output
+//! and standard error. The reference harness always connects both streams to
 //! pipes, so it cannot make a write fail.
 //!
 //! The tests either open the streams for reading only, so that each write fails
-//! with `EBADF`, or close them. A write to the lowest closed standard stream
-//! fails with `EINVAL` instead, as a write to procps-ng's epoll descriptor
-//! does. A write to a pipe whose read end is closed raises `SIGPIPE`, which
-//! ends the tool unless its parent ignores the signal.
+//! with `EBADF`, or close them. For `pgrep` and `pkill`, a write to the lowest
+//! closed standard stream fails with `EINVAL` instead, as a write to
+//! procps-ng's epoll descriptor does. procps-ng's `ps` has no epoll descriptor.
+//! A write to a pipe whose read end is closed raises `SIGPIPE`, which ends
+//! `pgrep` and `pkill` unless their parent ignores the signal.
 
 use std::{
     os::unix::process::ExitStatusExt,
@@ -97,10 +98,12 @@ fn a_write_to_a_closed_pipe_ends_the_tool_with_sigpipe(#[case] tool: &str) -> st
     Ok(())
 }
 
-// procps-ng's `main` calls `epoll_create` before anything else, so the epoll
+// procps-ng's `pgrep` calls `epoll_create` before anything else, so the epoll
 // descriptor takes the lowest standard descriptor that was closed, and writes
 // to it fail with `EINVAL`. Linux refuses to open the epoll descriptor through
-// `/dev/stdin`, and the other closed descriptors stay closed.
+// `/dev/stdin`, and the other closed descriptors stay closed. procps-ng's `ps`
+// keeps no epoll descriptor open in a closed stream's place, so its writes to a
+// closed stream fail with `EBADF`.
 #[rstest]
 #[case::standard_output(env!("CARGO_BIN_EXE_pgrep"), "-h", ">&-", Some(1), "pgrep: write error: Invalid argument\n")]
 #[case::standard_input_and_output(env!("CARGO_BIN_EXE_pgrep"), "-h", "<&- >&-", Some(1), "pgrep: write error: Bad file descriptor\n")]
@@ -111,6 +114,10 @@ fn a_write_to_a_closed_pipe_ends_the_tool_with_sigpipe(#[case] tool: &str) -> st
 #[case::pid_file_on_the_first_closed_descriptor(env!("CARGO_BIN_EXE_pgrep"), "-F /dev/fd/3", "3>&-", Some(1), "pgrep: Unable to open pidfile: No such device or address\n")]
 #[case::pid_file_with_a_leading_zero(env!("CARGO_BIN_EXE_pgrep"), "-F /dev/fd/03", "3>&-", Some(1), "pgrep: Unable to open pidfile: No such file or directory\n")]
 #[case::pid_file_on_a_later_closed_descriptor(env!("CARGO_BIN_EXE_pgrep"), "-F /dev/fd/4", "3>&- 4>&-", Some(1), "pgrep: Unable to open pidfile: No such file or directory\n")]
+#[case::ps_standard_output(env!("CARGO_BIN_EXE_ps"), "--help", ">&-", Some(1), "ps: write error: Bad file descriptor\n")]
+#[case::ps_standard_input_and_output(env!("CARGO_BIN_EXE_ps"), "--help", "<&- >&-", Some(1), "ps: write error: Bad file descriptor\n")]
+#[case::ps_listing(env!("CARGO_BIN_EXE_ps"), "L", ">&-", Some(1), "ps: write error: Bad file descriptor\n")]
+#[case::ps_standard_error(env!("CARGO_BIN_EXE_ps"), "-E", "2>&-", Some(1), "")]
 fn a_stream_that_is_closed_at_start_up_stays_closed(
     #[case] tool: &str,
     #[case] arguments: &str,

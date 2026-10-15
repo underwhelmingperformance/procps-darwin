@@ -7,6 +7,23 @@ use std::{
     os::unix::ffi::OsStrExt,
 };
 
+/// The version of procps-ng that the tools reproduce.
+pub(crate) const PROCPS_NG_VERSION: &str = "4.0.7";
+
+/// The line that a tool run as `program` prints for `-V`. It contains this
+/// project's name, so that the output does not claim to be procps-ng.
+pub(crate) fn version(program: &OsStr) -> Vec<u8> {
+    [
+        program.as_bytes(),
+        format!(
+            " from procps-darwin {} (procps-ng {PROCPS_NG_VERSION})\n",
+            env!("CARGO_PKG_VERSION")
+        )
+        .as_bytes(),
+    ]
+    .concat()
+}
+
 /// The tool's invocation name, computed as glibc computes
 /// `program_invocation_short_name`: the bytes of `argv[0]` after its last
 /// `/`. `fallback` is the name to use when `arguments` is empty.

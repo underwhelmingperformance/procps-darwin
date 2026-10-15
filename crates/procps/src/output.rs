@@ -218,24 +218,37 @@ impl Output {
             Buffering::Full
         };
 
-        // procps-ng's `main` calls `epoll_create` before anything else, so the
-        // epoll descriptor takes the lowest standard descriptor that was
-        // closed at start-up, and writes to that stream fail with `EINVAL`.
-        // When standard input and standard output were both closed, the epoll
-        // descriptor takes standard input's, and standard output's stays
-        // closed, so `fclose` fails with `EBADF`.
+        Self {
+            stdout: Stream::new(stdout.lock(), buffering),
+            stderr: Stream::new(io::stderr().lock(), Buffering::Unbuffered),
+        }
+    }
+
+    /// The streams of [`Output::new`], for a tool whose procps-ng counterpart
+    /// calls `epoll_create` before anything else, as `pgrep` and `pkill` do.
+    /// The epoll descriptor takes the lowest standard descriptor that was
+    /// closed at start-up, and writes to that stream fail with `EINVAL`. When
+    /// standard input and standard output were both closed, the epoll
+    /// descriptor takes standard input's, and standard output's stays closed,
+    /// so `fclose` fails with `EBADF`.
+    ///
+    /// ```
+    /// let _output = procps::output::Output::with_epoll_descriptor();
+    /// ```
+    #[must_use]
+    pub fn with_epoll_descriptor() -> Self {
         let closed = ClosedStreams::at_start();
         let refusal = |stream| (closed.first() == Some(stream)).then_some(Errno::INVAL);
         let close_error = (closed.first() == Some(StandardStream::Input)
             && closed.contains(StandardStream::Output))
         .then_some(Errno::BADF);
+        let Self { stdout, stderr } = Self::new();
 
         Self {
-            stdout: Stream::new(stdout.lock(), buffering)
+            stdout: stdout
                 .refusing(refusal(StandardStream::Output))
                 .closing_with(close_error),
-            stderr: Stream::new(io::stderr().lock(), Buffering::Unbuffered)
-                .refusing(refusal(StandardStream::Error)),
+            stderr: stderr.refusing(refusal(StandardStream::Error)),
         }
     }
 

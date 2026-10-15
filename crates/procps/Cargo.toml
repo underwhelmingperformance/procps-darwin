@@ -35,11 +35,12 @@ name = "reference"
 harness = false
 
 [dependencies]
+bitflags.workspace = true
 clap.workspace = true
 darwin-proc.workspace = true
 libc.workspace = true
 procps-core.workspace = true
-rustix = { workspace = true, features = ["fs"] }
+rustix = { workspace = true, features = ["fs", "param", "termios"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

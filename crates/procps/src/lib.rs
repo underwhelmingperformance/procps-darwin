@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Implementations of `ps`, `top`, `pgrep` and `pkill`. The binaries `pgrep`
-//! and `pkill` call [`pgrep::entry`].
+//! and `pkill` call [`pgrep::entry`], and `ps` calls [`ps::entry`].
 
 mod c_number;
 pub mod observability;
 pub mod output;
 pub mod pgrep;
 mod program;
+pub mod ps;
 mod signal;
 mod strerror;
 
