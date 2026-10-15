@@ -47,6 +47,12 @@ pub struct ResourceUsage {
     pub physical_footprint: u64,
     /// The largest physical footprint in bytes since the process started.
     pub peak_physical_footprint: u64,
+    /// The user CPU time of the process's children that have exited and been
+    /// reaped, whether by a `wait` call or automatically, because the process
+    /// ignores `SIGCHLD`.
+    pub children_user_time: Duration,
+    /// The system CPU time of the same children as `children_user_time`.
+    pub children_system_time: Duration,
 }
 
 /// A process's disk I/O, instruction, cycle and energy counters, from the same
@@ -98,6 +104,8 @@ impl ResourceUsage {
             resident_size: raw.ri_resident_size,
             physical_footprint: raw.ri_phys_footprint,
             peak_physical_footprint: raw.ri_lifetime_max_phys_footprint,
+            children_user_time: timebase.duration(raw.ri_child_user_time),
+            children_system_time: timebase.duration(raw.ri_child_system_time),
         };
         let counters = ResourceCounters {
             disk_bytes_read: raw.ri_diskio_bytesread,
@@ -185,6 +193,8 @@ mod tests {
         raw.ri_instructions = 11;
         raw.ri_cycles = 12;
         raw.ri_energy_nj = 13;
+        raw.ri_child_user_time = 48_000_000;
+        raw.ri_child_system_time = 4_800_000;
 
         assert_eq!(
             ResourceUsage::decode(&raw, Timebase::new(125, 3)),
@@ -200,6 +210,8 @@ mod tests {
                     resident_size: 5,
                     physical_footprint: 6,
                     peak_physical_footprint: 7,
+                    children_user_time: Duration::from_secs(2),
+                    children_system_time: Duration::from_millis(200),
                 },
                 ResourceCounters {
                     disk_bytes_read: 8,

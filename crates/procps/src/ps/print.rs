@@ -1233,6 +1233,8 @@ pub(crate) mod tests {
             resident_size: 16 << 20,
             physical_footprint: 0,
             peak_physical_footprint: 0,
+            children_user_time: Duration::ZERO,
+            children_system_time: Duration::ZERO,
         }
     }
 
