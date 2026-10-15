@@ -1361,12 +1361,12 @@ That would change the meaning of `trs` that task 2.3 chose, and the region
 totals that the helper sends and that `top`'s `CODE` field uses, so it is left
 to task 5.4, which applies the rule for private values to `trs` and `drs`.
 
-#### 5.4 Format specifiers
+#### 5.4 Format specifiers (done)
 
 All 153 specifiers, grouped by data source as in the appendix, plus the Darwin
 extensions. For a process whose private values the caller may not read, by the
-rule in `Caller::may_read_private`, `trs` is 0, `drs` is the virtual size and
-`exe` is `-`, as on Linux.
+rule in `Caller::may_read_private`, `trs` is 0, `drs` is the virtual size,
+`stackp` is 0 and `exe` is `-`, as on Linux.
 
 The Darwin extensions are `arch`, `csw`, `cycles`, `energy`, `footprint`,
 `instrs`, `maxfootprint` and `wired`, which `docs/mappings.md` describes. `arch`
@@ -1392,22 +1392,22 @@ so unit tests check them. The new text columns, `environ`, `exe` and `supgrp`,
 pass through the escaping, which stops at the first NUL, so no cell contains a
 NUL, as task 5.3 assumes.
 
-Task 5.3 prints `-` for `stackp`, `esp` and `eip`, the address columns of `X`.
-This task decides whether `ps` can read them. On Linux, `stackp` is the start of
-the main thread's stack, and `esp` and `eip` are 0 except for a task that is
-exiting or dumping core. Darwin has each thread's stack pointer and program
-counter, which `thread_get_state` reads with `ARM_THREAD_STATE64`, but the call
-needs a port for the thread, and a thread's port comes from a port for its task.
-A probe on macOS 27, run as an unprivileged user with developer mode off and SIP
-on, asked for the task port of another ad hoc signed process of the same user.
-`task_for_pid` failed with `KERN_FAILURE`, and `task_read_for_pid` and
-`task_inspect_for_pid` failed as well. The probe did not run as root. As root,
-`task_for_pid` fails for platform binaries (see "What macOS exposes"). XNU
-checks a request for a task's read port separately from a request for its
-control port, though, and `thread_get_state` accepts a thread's read port. This
-task probes `task_read_for_pid` as root, for platform binaries and for other
-processes, and decides whether the helper reads the registers and where the
-start of the stack comes from.
+`trs` keeps the meaning that task 2.3 gave it, the executable regions outside
+the submaps. The helper sends that size in its region totals, and the plan for
+`top`'s `CODE` field uses the same total. Counting only the main executable's
+`__TEXT` segment would be closer to Linux's code segment. Task 5.4 keeps the
+current mapping, and task 6.3 reconsiders the meanings of `trs` and the planned
+`CODE` field together.
+
+`esp` and `eip`, two of the address columns of `X`, show 0 for every process.
+`stackp` shows 0 when the access policy denies `ps` access to the process's
+private values or when the process has no memory, and `-` otherwise. procps-ng
+shows the same zeros on Linux, as `docs/mappings.md` explains. `ps` does not
+read live registers, although a task port would give them: Linux shows 0 for a
+task that is not exiting or dumping core, so live registers would differ from
+procps-ng's output for almost every process. No call reports the start of the
+main thread's stack, so `stackp` stays `-` for a process that `ps` may read and
+that has memory.
 
 #### 5.5 Threads and forest
 
@@ -1447,7 +1447,8 @@ processor's core type, which `Host::processors` does not report yet.
 #### 6.3 Fields and sorting
 
 Every procps-ng field with its Darwin source, `-` for concepts that macOS lacks,
-and the Darwin extensions from 5.4.
+and the Darwin extensions from 5.4. This task also decides whether `CODE` and
+`ps`'s `trs` count only the main executable's `__TEXT` segment (task 5.4).
 
 #### 6.4 Batch mode
 
