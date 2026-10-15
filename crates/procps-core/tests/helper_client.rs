@@ -66,36 +66,44 @@ enum Behaviour {
     Stall,
 }
 
-/// Serves one connection on a socket at `path` as `behaviour` says. The
-/// thread's result is the request, if the fake helper read one.
-fn fake_helper(
-    path: &Path,
-    behaviour: Behaviour,
-) -> io::Result<thread::JoinHandle<Result<Option<Request>, String>>> {
+/// Why the fake helper failed.
+#[derive(Debug, thiserror::Error)]
+enum FakeHelperError {
+    #[error("the client did not connect in time")]
+    NoConnection,
+    #[error("the fake helper panicked")]
+    Panicked,
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    Poll(#[from] rustix::io::Errno),
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+    #[error(transparent)]
+    Patience(#[from] std::num::TryFromIntError),
+}
+
+/// The fake helper's thread. Its result is the request, if it read one.
+type FakeHelper = thread::JoinHandle<Result<Option<Request>, FakeHelperError>>;
+
+/// Serves one connection on a socket at `path` as `behaviour` says.
+fn fake_helper(path: &Path, behaviour: Behaviour) -> io::Result<FakeHelper> {
     let socket = UnixListener::bind(path)?;
 
     Ok(thread::spawn(move || {
         let mut stream = accept(&socket)?;
 
         if let Behaviour::SendAtOnce(bytes) = behaviour {
-            stream
-                .write_all(&bytes)
-                .map_err(|error| error.to_string())?;
+            stream.write_all(&bytes)?;
 
             return Ok(None);
         }
 
-        let request = stream
-            .read_message::<Request>()
-            .map_err(|error| error.to_string())?;
+        let request = stream.read_message::<Request>()?;
 
         match behaviour {
-            Behaviour::Respond(response) => stream
-                .write_message(&response)
-                .map_err(|error| error.to_string())?,
-            Behaviour::Send(bytes) => stream
-                .write_all(&bytes)
-                .map_err(|error| error.to_string())?,
+            Behaviour::Respond(response) => stream.write_message(&response)?,
+            Behaviour::Send(bytes) => stream.write_all(&bytes)?,
             Behaviour::Stall => thread::sleep(PATIENCE * 2),
             Behaviour::Close | Behaviour::SendAtOnce(_) => {}
         }
@@ -104,18 +112,33 @@ fn fake_helper(
     }))
 }
 
+/// The request that the fake helper read, once its thread has finished.
+fn finish(helper: FakeHelper) -> Result<Option<Request>, FakeHelperError> {
+    helper.join().map_err(|_| FakeHelperError::Panicked)?
+}
+
+/// Waits for the fake helper's thread after an exchange that fails. The fake
+/// helper's own error is expected then, so only a panic is an error.
+fn finish_failed(helper: FakeHelper) -> Result<(), FakeHelperError> {
+    helper
+        .join()
+        .map(drop)
+        .map_err(|_| FakeHelperError::Panicked)
+}
+
 /// Accepts one connection on `socket`, waiting at most four times the client's
-/// patience. A test whose client fails before it connects then reports the
-/// client's error when it joins the fake helper.
-fn accept(socket: &UnixListener) -> Result<UnixStream, String> {
-    let wait = Timespec::try_from(PATIENCE * 4).map_err(|error| error.to_string())?;
+/// patience. The wait is bounded, so when a test's client fails before it
+/// connects, joining the fake helper returns, and the test reports the
+/// client's error.
+fn accept(socket: &UnixListener) -> Result<UnixStream, FakeHelperError> {
+    let wait = Timespec::try_from(PATIENCE * 4)?;
     let mut ready = [PollFd::new(socket, PollFlags::IN)];
 
-    match poll(&mut ready, Some(&wait)) {
-        Ok(0) => Err("the client did not connect in time".to_owned()),
-        Ok(_) => Ok(socket.accept().map_err(|error| error.to_string())?.0),
-        Err(error) => Err(error.to_string()),
+    if poll(&mut ready, Some(&wait))? == 0 {
+        return Err(FakeHelperError::NoConnection);
     }
+
+    Ok(socket.accept()?.0)
 }
 
 /// A client for the fake helper at `path`. It accepts a helper that runs as
@@ -135,7 +158,7 @@ fn the_helper_sends_the_snapshot() -> Result<(), Box<dyn std::error::Error>> {
     let request = SnapshotRequest::default().with_system();
 
     let taken = client(&path)?.snapshot(&request)?;
-    let received = helper.join().map_err(|_| "the helper panicked")??;
+    let received = finish(helper)?;
 
     assert_eq!(
         (taken, received),
@@ -259,7 +282,7 @@ fn a_failed_exchange_is_an_error(
     let helper = fake_helper(&path, behaviour)?;
 
     let failure = client(&path)?.snapshot(&request).err().map(Failure::from);
-    helper.join().map_err(|_| "the helper panicked")?.ok();
+    finish_failed(helper)?;
 
     assert_eq!(failure, Some(expected));
 
@@ -283,7 +306,7 @@ fn a_refusal_sent_at_once_always_reaches_the_client() -> Result<(), Box<dyn std:
         };
 
         let failure = client(&path)?.snapshot(&request).err().map(Failure::from);
-        helper.join().map_err(|_| "the helper panicked")??;
+        finish(helper)?;
 
         if failure != Some(Failure::Refused(Refusal::Busy)) {
             unexpected.push(failure);
@@ -413,7 +436,7 @@ fn helper_or_local_reads_locally_when_the_helper_fails(
     let request = SnapshotRequest::default().for_processes([Pid::current()]);
 
     let read = pids(&source.snapshot(&request)?);
-    helper.join().map_err(|_| "the helper panicked")?.ok();
+    finish_failed(helper)?;
 
     assert_eq!(
         (read, source.uses_helper()),
@@ -482,11 +505,11 @@ fn threads_can_share_a_source() -> Result<(), Box<dyn std::error::Error>> {
         let readers = [(); 2]
             .map(|()| scope.spawn(|| source.snapshot(&request).map(|snapshot| pids(&snapshot))));
 
-        readers.map(|reader| reader.join().map_err(|_| "a reader panicked"))
+        readers.map(|reader| reader.join().ok())
     });
 
     assert_eq!(
-        read.map(|pids| pids.map(Result::ok).ok().flatten()),
+        read.map(|pids| pids.and_then(Result::ok)),
         [Some(vec![Pid::current()]), Some(vec![Pid::current()])]
     );
 
