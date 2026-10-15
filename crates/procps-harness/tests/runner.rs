@@ -9,6 +9,7 @@
 
 use std::{
     collections::BTreeMap,
+    io::{BufRead, BufReader},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::mpsc::{self, RecvTimeoutError},
@@ -18,7 +19,9 @@ use std::{
 use assert_matches::assert_matches;
 use darwin_proc::{Pid, ProcessInfo, Status};
 use pretty_assertions::assert_eq;
-use procps_harness::{Error, FixtureEnd, Generation, Outcome, Runner, Scenario, ScenarioFile};
+use procps_harness::{
+    Error, Expiry, FixtureEnd, Generation, Outcome, Runner, Scenario, ScenarioFile,
+};
 use rstest::rstest;
 
 const TOOLS: &[(&str, &str)] = &[
@@ -187,11 +190,15 @@ enum RecordError {
 
 /// The pid in the file `record`.
 fn recorded_pid(record: &Path) -> Result<Pid, RecordError> {
-    let text = std::fs::read_to_string(record).map_err(RecordError::Unreadable)?;
+    parse_pid(&std::fs::read_to_string(record).map_err(RecordError::Unreadable)?)
+}
+
+/// The pid in `text`, which a command recorded.
+fn parse_pid(text: &str) -> Result<Pid, RecordError> {
     let pid = text
         .trim()
         .parse::<i32>()
-        .map_err(|_| RecordError::NotAPid(text.clone()))?;
+        .map_err(|_| RecordError::NotAPid(text.to_owned()))?;
 
     Ok(Pid::from(pid))
 }
@@ -226,39 +233,90 @@ fn no_process_outlives_its_run(#[case] command: &[&str]) -> Result<(), Box<dyn s
     Ok(())
 }
 
-#[rstest]
-#[case::timed_out(
-    &["record-and-wait"],
-    Some(Duration::from_secs(30)),
-    |error: &Error| matches!(error, Error::Timeout { .. })
-)]
-#[case::stopped_leader(
-    &["record-and-stop-leader", "{session}"],
-    None,
-    |error: &Error| matches!(error, Error::LeaderStopped(signal) if signal == "SIGSTOP")
-)]
-fn the_command_does_not_outlive_a_run_that_fails(
-    #[case] command: &[&str],
-    #[case] timeout: Option<Duration>,
-    #[case] expected: fn(&Error) -> bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+#[test]
+fn the_command_does_not_outlive_a_run_whose_leader_stops() -> Result<(), Box<dyn std::error::Error>>
+{
     let tools = Tools::new()?;
-    // The command has to record its pid before the timeout passes.
-    let runner = match timeout {
-        Some(timeout) => tools.runner.clone().with_timeout(timeout),
-        None => tools.runner.clone(),
-    };
     let record = tools.directory.path().join("pid");
-    let mut command = command.to_vec();
-    command.push(path_text(&record)?);
+    let command = ["record-and-stop-leader", "{session}", path_text(&record)?];
 
     assert_matches!(
-        run_or_give_up(runner, scenario(&command, FIXTURES)?)?,
-        Err(error) if expected(&error)
+        run_or_give_up(tools.runner.clone(), scenario(&command, FIXTURES)?)?,
+        Err(Error::LeaderStopped(signal)) if signal == "SIGSTOP"
     );
     let pid = recorded_pid(&record)?;
 
     assert_eq!(living(|info| info.pid == pid)?, []);
+
+    Ok(())
+}
+
+/// The thread that ran a scenario panicked.
+#[derive(Debug, thiserror::Error)]
+#[error("the thread that ran the scenario panicked")]
+struct RunPanicked;
+
+// The command writes its pid to a FIFO and then waits. The test reads the pid
+// and then ends the run's wait, and the runner kills the run's processes as it
+// does after a timeout. The test opens both ends of the FIFO before the run
+// starts, and the run's thread keeps the write end until the run returns. A run
+// that fails before the command writes its pid therefore ends the test's read.
+#[test]
+fn the_command_does_not_outlive_a_run_that_expires() -> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let record = tools.directory.path().join("pid");
+    nix::unistd::mkfifo(
+        &record,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )?;
+    // rustix does not add `CLOEXEC` as std does. Without it, the children of
+    // concurrent tests would inherit a write end and keep the read open.
+    let reader = rustix::fs::open(
+        &record,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())?;
+    let writer = rustix::fs::open(
+        &record,
+        rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let expiry = Expiry::default();
+    let runner = tools.runner.clone().with_expiry(expiry.clone());
+    let scenario = scenario(&["record-and-wait", path_text(&record)?], FIXTURES)?;
+    let run = std::thread::spawn(move || {
+        let outcome = run_or_give_up(runner, scenario);
+        drop(writer);
+
+        outcome
+    });
+
+    let mut recorded = String::new();
+    let read = BufReader::new(std::fs::File::from(reader)).read_line(&mut recorded);
+    expiry.expire();
+    let outcome = run.join().map_err(|_| RunPanicked)?;
+
+    assert_matches!(outcome?, Err(Error::Expired));
+    read?;
+    let pid = parse_pid(&recorded)?;
+
+    assert_eq!(living(|info| info.pid == pid)?, []);
+
+    Ok(())
+}
+
+#[test]
+fn a_run_with_an_expiry_that_has_expired_ends_at_once() -> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let expiry = Expiry::default();
+    expiry.expire();
+    let runner = tools.runner.clone().with_expiry(expiry);
+
+    assert_matches!(
+        run_or_give_up(runner, scenario(&["wait-for-child"], FIXTURES)?)?,
+        Err(Error::Expired)
+    );
 
     Ok(())
 }

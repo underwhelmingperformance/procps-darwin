@@ -11,7 +11,10 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::mpsc::{self, RecvTimeoutError},
+    sync::{
+        Arc, Mutex, PoisonError,
+        mpsc::{self, RecvTimeoutError},
+    },
     thread::JoinHandle,
     time::Duration,
 };
@@ -35,6 +38,87 @@ use crate::{
 /// The procps-ng release that the golden files come from.
 const REFERENCE_VERSION: &str = "4.0.7";
 
+/// What the thread that waits for the session leader, or an [`Expiry`], sends
+/// to the runner.
+#[derive(Debug)]
+enum Waited {
+    /// The leader exited or stopped. The value is `waitid`'s result: the signal
+    /// that stopped the leader, if one did, or the error.
+    Changed(rustix::io::Result<Option<i32>>),
+    /// The runner's expiry ended the wait.
+    Expired,
+}
+
+/// Ends the wait of a run before its timeout passes. A test calls
+/// [`Expiry::expire`] once the run's command has done what the test needs, so
+/// the test need not wait for the timeout. The runner then kills the session
+/// leader and its process group, as it does when the timeout passes, and the
+/// run fails with [`Error::Expired`]. Clones refer to the same expiry.
+#[derive(Clone, Debug, Default)]
+pub struct Expiry(Arc<Mutex<ExpiryState>>);
+
+/// The state of an [`Expiry`].
+#[derive(Debug, Default)]
+struct ExpiryState {
+    expired: bool,
+    /// The runs that are waiting, each with the number of its [`Watch`].
+    waiting: Vec<(u64, mpsc::Sender<Waited>)>,
+    /// The number of the next [`Watch`].
+    next: u64,
+}
+
+/// A run's registration with an [`Expiry`]. Dropping it removes the run's
+/// sender from the expiry.
+struct Watch<'a> {
+    expiry: &'a Expiry,
+    number: u64,
+}
+
+impl Drop for Watch<'_> {
+    fn drop(&mut self) {
+        let mut state = self.expiry.0.lock().unwrap_or_else(PoisonError::into_inner);
+        state.waiting.retain(|(number, _)| *number != self.number);
+    }
+}
+
+impl Expiry {
+    /// Ends the wait of each run that is waiting on this expiry, and of each
+    /// run that starts waiting later.
+    ///
+    /// ```
+    /// use procps_harness::Expiry;
+    ///
+    /// Expiry::default().expire();
+    /// ```
+    pub fn expire(&self) {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        state.expired = true;
+
+        for (_, waiting) in state.waiting.drain(..) {
+            let _ = waiting.send(Waited::Expired);
+        }
+    }
+
+    /// Sends [`Waited::Expired`] to `waiting` now if this expiry has expired,
+    /// or makes `expire` send it later, while the returned [`Watch`] exists.
+    fn watch(&self, waiting: mpsc::Sender<Waited>) -> Watch<'_> {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let number = state.next;
+        state.next += 1;
+
+        if state.expired {
+            let _ = waiting.send(Waited::Expired);
+        } else {
+            state.waiting.push((number, waiting));
+        }
+
+        Watch {
+            expiry: self,
+            number,
+        }
+    }
+}
+
 /// How a session leader ended. In each case the runner has sent `SIGKILL` to
 /// the leader and to its process group.
 enum SessionEnd {
@@ -48,6 +132,8 @@ enum SessionEnd {
     Stopped(String),
     /// The timeout passed.
     TimedOut,
+    /// The runner's expiry ended the wait.
+    Expired,
 }
 
 /// Reads everything from `stream`.
@@ -157,17 +243,18 @@ const ATTEMPTS: usize = 20;
 /// changes when decoys run. Runs on several threads or in several processes
 /// therefore do not see each other's processes.
 ///
-/// When the leader exits or stops, or the timeout passes, the runner sends
-/// `SIGKILL` to the leader and to its process group. A command must not stop
-/// the leader. The runner reports a stop that it sees, but it can miss a stop
-/// that a `SIGCONT` undoes at once, and the run then goes on, so the outcome
-/// depends on timing.
+/// When the leader exits or stops, the timeout passes, or the runner's
+/// [`Expiry`] ends the wait, the runner sends `SIGKILL` to the leader and to
+/// its process group. A command must not stop the leader. The runner reports a
+/// stop that it sees, but it can miss a stop that a `SIGCONT` undoes at once,
+/// and the run then goes on, so the outcome depends on timing.
 #[derive(Clone, Debug)]
 pub struct Runner {
     tools: PathBuf,
     host: PathBuf,
     credentials: Option<Credentials>,
     timeout: Duration,
+    expiry: Option<Expiry>,
 }
 
 /// The golden files that [`Runner::generate`] wrote and removed.
@@ -196,6 +283,7 @@ impl Runner {
             host: host.into(),
             credentials: None,
             timeout: Duration::from_secs(60),
+            expiry: None,
         }
     }
 
@@ -236,6 +324,24 @@ impl Runner {
     #[must_use]
     pub fn with_timeout(self, timeout: Duration) -> Self {
         Self { timeout, ..self }
+    }
+
+    /// The runner, changed so that `expiry` can end the wait for a session
+    /// leader before the timeout passes.
+    ///
+    /// ```
+    /// use procps_harness::{Expiry, Runner};
+    ///
+    /// let runner =
+    ///     Runner::new("/usr/bin", "target/debug/procps-harness").with_expiry(Expiry::default());
+    /// # let _ = runner;
+    /// ```
+    #[must_use]
+    pub fn with_expiry(self, expiry: Expiry) -> Self {
+        Self {
+            expiry: Some(expiry),
+            ..self
+        }
     }
 
     /// Checks that the tools directory has the procps-ng release that the
@@ -364,9 +470,10 @@ impl Runner {
     /// # Errors
     ///
     /// Returns an error if a process cannot be started, the command does not
-    /// finish in time, the command signals a decoy, a signal terminates or
-    /// stops the session leader, or the runner cannot watch, write to, read
-    /// from or kill the session leader.
+    /// finish in time, the runner's expiry ends the wait, the command signals a
+    /// decoy, a signal terminates or stops the session leader, members of the
+    /// leader's process group survive the runner's kills, or the runner cannot
+    /// watch, write to, read from or kill the session leader.
     pub fn run(&self, scenario: &Scenario) -> Result<Outcome, Error> {
         self.run_with(scenario, true)
     }
@@ -447,6 +554,7 @@ impl Runner {
                         after: self.timeout,
                     });
                 }
+                SessionEnd::Expired => return Err(Error::Expired),
             };
 
             if let Some(signal) = status.signal() {
@@ -476,11 +584,16 @@ impl Runner {
     }
 
     /// Sends `request` to the session leader, waits until the leader exits or
-    /// stops, or the timeout passes, then sends `SIGKILL` to the leader and to
-    /// its process group.
+    /// stops, the timeout passes or the expiry ends the wait, then sends
+    /// `SIGKILL` to the leader and to its process group.
     fn wait_for_session(&self, mut leader: Child, request: &[u8]) -> Result<SessionEnd, Error> {
         let pid = Pid::from_child(&leader);
         let (sender, receiver) = mpsc::channel();
+        let _watch = self
+            .expiry
+            .as_ref()
+            .map(|expiry| expiry.watch(sender.clone()));
+
         let start = || -> Result<(Reader, Reader, Writer), Error> {
             let stdout = read_in_background(leader.stdout.take())?;
             let stderr = read_in_background(leader.stderr.take())?;
@@ -500,9 +613,11 @@ impl Runner {
                             changed => break changed,
                         }
                     };
-                    let _ = sender.send(
-                        changed.map(|change| change.and_then(|change| change.stopping_signal())),
-                    );
+                    let _ =
+                        sender
+                            .send(Waited::Changed(changed.map(|change| {
+                                change.and_then(|change| change.stopping_signal())
+                            })));
                 })
                 .map_err(Error::WatchThread)?;
 
@@ -526,8 +641,11 @@ impl Runner {
         // The waiting thread returns once the leader has died. Waiting for it
         // here keeps it from calling `waitid` after the leader is reaped, when
         // the pid can belong to another child of the runner.
-        if waited == Some(Err(RecvTimeoutError::Timeout)) {
-            let _ = receiver.recv();
+        if matches!(
+            waited,
+            Some(Err(RecvTimeoutError::Timeout) | Ok(Waited::Expired))
+        ) {
+            while let Ok(Waited::Expired) = receiver.recv() {}
         }
 
         let status = leader.wait();
@@ -546,7 +664,10 @@ impl Runner {
         }
 
         let stopped = match waited {
-            Some(Ok(changed)) => changed.map_err(|errno| Error::WaitLeader(errno.into()))?,
+            Some(Ok(Waited::Changed(changed))) => {
+                changed.map_err(|errno| Error::WaitLeader(errno.into()))?
+            }
+            Some(Ok(Waited::Expired)) => return Ok(SessionEnd::Expired),
             Some(Err(RecvTimeoutError::Timeout)) => return Ok(SessionEnd::TimedOut),
             Some(Err(RecvTimeoutError::Disconnected)) | None => return Err(Error::WaiterLost),
         };
@@ -609,5 +730,34 @@ impl Runner {
         }
 
         Ok(directory)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{PoisonError, mpsc};
+
+    use pretty_assertions::assert_eq;
+
+    use super::Expiry;
+
+    #[test]
+    fn a_run_stops_waiting_on_the_expiry_when_its_wait_ends() {
+        let expiry = Expiry::default();
+        let waiting = || {
+            expiry
+                .0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .waiting
+                .len()
+        };
+        let (sender, _receiver) = mpsc::channel();
+
+        let watch = expiry.watch(sender);
+        let during = waiting();
+        drop(watch);
+
+        assert_eq!((during, waiting()), (1, 0));
     }
 }
