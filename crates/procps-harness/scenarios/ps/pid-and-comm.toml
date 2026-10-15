@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 description = "ps prints the pid and name of each selected process, with no header"
-pending = true
 command = ["ps", "-o", "pid=,comm=", "-p", "{a1},{b1}"]
 
 [[fixture]]

@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+TT       TT       TTY      TTY      TTY      TTY  COMMAND
+?        ?        ?        ?        ?        ?    harness-alpha
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

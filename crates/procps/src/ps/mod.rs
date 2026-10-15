@@ -4,17 +4,25 @@
 
 //! `ps`.
 
+mod display;
 mod entry;
 mod error;
+mod escape;
 mod format;
+mod glibc_ctype;
 mod help;
+mod layout;
+mod names;
 mod options;
 mod parser;
 mod personality;
+mod print;
 mod run;
 mod selection;
 mod signals;
+mod sort;
 mod specifier;
 mod system;
+mod version_order;
 
 pub use entry::entry;

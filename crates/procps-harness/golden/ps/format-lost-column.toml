@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+PIDXX C
+{a1} 
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

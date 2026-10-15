@@ -11,8 +11,11 @@
 
 use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 
+use procps_core::{Charset, FieldGroup, Process, Snapshot};
+
 use crate::{
     c_number::{Base, whole_strtoul},
+    linux,
     ps::{error::SyntaxError, personality, system::System},
 };
 
@@ -133,6 +136,149 @@ pub(crate) struct Selection {
     /// `-N` and `--deselect`: select the processes that the other options
     /// do not select.
     pub(crate) negate: bool,
+}
+
+/// What the selection needs to know about `ps` itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Myself {
+    /// The effective user ID of `ps`.
+    pub(crate) euid: u32,
+    /// The device number of the controlling terminal of `ps`, or `None`
+    /// without one.
+    pub(crate) terminal: Option<libc::dev_t>,
+}
+
+impl Selection {
+    /// The pids that `ps` reads directly, in the order of the command line,
+    /// if the selection is `-q` or a `-p` that procps-ng reads directly.
+    pub(crate) fn quick_pids(&self) -> Option<&[i32]> {
+        self.lists.iter().find_map(|selector| match selector {
+            Selector::QuickPids(pids) => Some(pids.as_slice()),
+            _ => None,
+        })
+    }
+
+    /// The field groups that the selection needs. BSD's `r` needs the
+    /// threads, because they decide whether a process is running.
+    pub(crate) fn groups(&self) -> &'static [FieldGroup] {
+        if self.running_only {
+            &[FieldGroup::Threads]
+        } else {
+            &[]
+        }
+    }
+
+    /// Whether the selection accepts `process` before BSD's `r` and `-N`
+    /// apply, as the first part of procps-ng's `want_this_proc` decides.
+    /// `-A`, `-e` and BSD's `ax` accept every process. Otherwise, the tests
+    /// of the selection options without values apply when one of those
+    /// options was given, and also when no selection list was given. A
+    /// process is accepted if it passes those tests or if one of the lists
+    /// matches it.
+    pub(crate) fn accepts(
+        &self,
+        snapshot: &Snapshot,
+        process: &Process,
+        myself: Myself,
+        charset: Charset,
+    ) -> bool {
+        self.all
+            || ((self.simple.contains(SimpleTests::GIVEN) || self.lists.is_empty())
+                && self.simple_accept(process, myself))
+            || self
+                .lists
+                .iter()
+                .any(|selector| selector.matches(snapshot, process, myself, charset))
+    }
+
+    /// Whether a process might be selected, given whether the selection
+    /// accepts it. With BSD's `r`, the selection also depends on the
+    /// process's state, which `selects` decides after the requested data
+    /// has been read.
+    pub(crate) fn may_select(&self, accepted: bool) -> bool {
+        if self.running_only {
+            accepted || self.negate
+        } else {
+            accepted != self.negate
+        }
+    }
+
+    /// Whether the selection selects `process`, given whether it accepts it,
+    /// as the end of procps-ng's `want_this_proc` decides. BSD's `r` keeps
+    /// the processes that are running or in an uninterruptible wait, and
+    /// `-N` then inverts the result.
+    pub(crate) fn selects(&self, accepted: bool, process: &Process) -> bool {
+        let running = matches!(process.linux_state().known_letter(), Some('R' | 'D'));
+
+        (accepted && (running || !self.running_only)) != self.negate
+    }
+
+    /// Whether `process` passes the tests of the selection options without
+    /// values, as procps-ng's `simple_accept` decides.
+    fn simple_accept(&self, process: &Process, myself: Myself) -> bool {
+        let info = &process.info;
+        let terminal = info.terminal.map(|terminal| terminal.device);
+        let tests = self.simple;
+
+        !(tests.contains(SimpleTests::OWN_USER) && info.credentials.euid.as_raw() != myself.euid
+            || tests.contains(SimpleTests::OWN_TERMINAL) && terminal != myself.terminal
+            || tests.contains(SimpleTests::NO_LEADERS) && info.session_leader
+            || tests.contains(SimpleTests::HAS_TERMINAL) && terminal.is_none())
+    }
+}
+
+impl Selector {
+    /// Whether one of the selector's values matches `process`, as
+    /// procps-ng's `proc_was_listed` decides.
+    fn matches(
+        &self,
+        snapshot: &Snapshot,
+        process: &Process,
+        myself: Myself,
+        charset: Charset,
+    ) -> bool {
+        let info = &process.info;
+        let credentials = &info.credentials;
+
+        match self {
+            Self::RealUsers(users) => users.contains(&credentials.ruid.as_raw()),
+            Self::EffectiveUsers(users) => users.contains(&credentials.euid.as_raw()),
+            Self::RealGroups(groups) => groups.contains(&credentials.rgid.as_raw()),
+            Self::EffectiveGroups(groups) => groups.contains(&credentials.egid.as_raw()),
+            Self::ProcessGroups(groups) => groups.contains(&info.pgid.as_raw()),
+            Self::Pids(pids) | Self::QuickPids(pids) => pids.contains(&info.pid.as_raw()),
+            Self::Parents(parents) => parents.contains(&info.ppid.as_raw()),
+            Self::Sessions(sessions) => linux::session(snapshot, process)
+                .is_some_and(|session| sessions.contains(&session.as_raw())),
+            Self::Terminals(terminals) => {
+                let device = info.terminal.map(|terminal| terminal.device);
+
+                terminals.iter().any(|terminal| match terminal {
+                    Terminal::Device(selected) => device == Some(*selected),
+                    Terminal::None => device.is_none(),
+                    Terminal::Own => device == myself.terminal,
+                })
+            }
+            Self::Commands(commands) => {
+                let name = process.linux_command(charset);
+
+                commands
+                    .iter()
+                    .any(|command| command_matches(name.as_bytes(), command))
+            }
+        }
+    }
+}
+
+/// Whether the command name `name` matches `command` from `-C`, as
+/// procps-ng compares them. A name of 15 bytes, the most that Linux keeps,
+/// also matches a longer command that starts with it.
+fn command_matches(name: &[u8], command: &[u8]) -> bool {
+    if name.len() == 15 && command.len() >= 15 && name == &command[..15] {
+        return true;
+    }
+
+    name == command
 }
 
 /// Decides the tests of the selection options without values, as procps-ng's

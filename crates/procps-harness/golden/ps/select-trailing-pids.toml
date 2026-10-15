@@ -1,0 +1,10 @@
+status = 0
+stdout = """
+{a1} harness-alpha
+{b1} harness-beta
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
+b1 = "running"

@@ -239,10 +239,14 @@ exporter.
 - `nix develop -c just check` runs clippy, the tests, the documentation build,
   `cargo deny`, `cargo audit` and `reuse lint`, then `nix flake check`. The
   flake check builds the workspace with Nix and repeats those checks, in the dev
-  profile as locally, and runs treefmt. Its audit reads the RustSec advisory
-  database pinned in `flake.lock`. Renovate's weekly lock-file maintenance is
-  configured to update it, and `nix flake update advisory-db` updates it by
-  hand. `just audit` reads the live database. CI runs `nix flake check`.
+  profile as locally, and runs treefmt. Its `glibc-ctype` check regenerates
+  `crates/procps/src/ps/glibc_ctype.rs` from the patched source of the glibc in
+  the flake's nixpkgs, which the reference container uses, and fails when the
+  committed file differs. `just glibc-ctype` writes the regenerated file. The
+  flake check's audit reads the RustSec advisory database pinned in
+  `flake.lock`. Renovate's weekly lock-file maintenance is configured to update
+  it, and `nix flake update advisory-db` updates it by hand. `just audit` reads
+  the live database. CI runs `nix flake check`.
 - The `pre-commit` hook formats the changed files and runs clippy on every
   commit. The `pre-push` hook runs `nix flake check` once for each push, on the
   first ref that the push does not delete, which can be a branch or a tag. A ref

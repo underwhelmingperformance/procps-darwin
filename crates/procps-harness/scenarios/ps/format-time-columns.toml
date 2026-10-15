@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "the CPU time columns of a process that has used no time"
+command = ["ps", "-o", "time,cputime,atime,times,cputimes,bsdtime,c,cp,%cpu,pcpu", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"

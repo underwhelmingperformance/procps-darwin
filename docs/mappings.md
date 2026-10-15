@@ -61,6 +61,10 @@ The modifiers follow procps-ng's order:
 Linux's `L` marks a process with locked pages. Darwin does not report locked
 pages separately from other wired memory, so the state never has `L`.
 
+procps-ng's `ps -a` and `ps -d` leave out session leaders, which procps-ng
+recognises by a session ID that equals the process ID. `ps` recognises them by
+`EPROC_SLEADER`, as for the `s` modifier.
+
 ## Priority, nice and scheduling policy
 
 procps-ng computes `pri`, `opri`, `priority`, `rtprio`, `ni`, `class` and
@@ -75,10 +79,16 @@ policy. The tools derive them as follows:
 | `POLICY_RR`                  | `SCHED_RR`    | -1 minus the real-time priority | `pti_priority`, limited to 1 to 99 |
 | unknown                      | none          | 20 plus `p_nice`                | none                               |
 
-The nice value is `p_nice` from `kinfo_proc`, which any user can read. The
-policy and the Darwin base priority come from `PROC_PIDTASKINFO`, so without the
-helper they are unknown for another user's process. procps-ng prints `-` as the
-class of an unknown policy.
+`ps`'s `ni` column shows `-` for `SCHED_FIFO` and `SCHED_RR`, as procps-ng shows
+it for a real-time process, and the nice value otherwise, including when the
+policy is unknown. The nice value is `p_nice` from `kinfo_proc`, which any user
+can read. The policy and the Darwin base priority come from `PROC_PIDTASKINFO`,
+so without the helper they are unknown for another user's process. procps-ng
+prints `-` as the class of an unknown policy. Darwin has no task information for
+a zombie, whereas Linux reports the policy that the process had before it
+exited. The tools approximate a zombie's policy as `SCHED_OTHER`, which most
+processes use, so a zombie that had a real-time policy shows the class `TS`, not
+`FF` or `RR`.
 
 Darwin has no separate real-time priority, so a fixed-priority process shows its
 Darwin base priority as its real-time priority. Darwin's priorities run from 0
@@ -151,6 +161,7 @@ sources:
 | ----------- | ----------------------------------------------- | -------------------------------------------------------------- |
 | `vsz`, `sz` | `VmSize`                                        | `pti_virtual_size` from `PROC_PIDTASKINFO`                     |
 | `rss`       | `VmRSS`                                         | `pti_resident_size` from `PROC_PIDTASKINFO`                    |
+| `%mem`      | `VmRSS` divided by `MemTotal`                   | `pti_resident_size` divided by `hw.memsize`                    |
 | `trs`       | the code segment, `end_code` minus `start_code` | the executable regions that are not submaps                    |
 | `drs`       | the virtual size minus the code segment         | the virtual size minus `trs`                                   |
 | `size`      | `VmData` plus `VmStk`                           | the private writable regions that are not submaps              |
@@ -167,7 +178,16 @@ regions that Darwin reports as shared.
 
 On Darwin, the virtual size of a process includes the shared cache and large
 reservations of address space, so `vsz`, `sz` and `drs` are much larger than on
-Linux, as they are in Apple's `ps`.
+Linux, as they are in Apple's `ps`. `sz` counts pages of the caller's page size.
+Apple silicon has pages of 16 KiB, and Linux's pages usually have 4 KiB.
+`MemTotal` leaves out the memory that Linux's kernel reserves, whereas
+`hw.memsize` is the installed memory.
+
+The kernel frees a zombie's memory, and Darwin has no task information, threads
+or memory regions for a zombie. `vsz`, `rss`, `sz`, `%mem`, `trs`, `drs`,
+`tsiz`, `dsiz` and `size` show 0 for a zombie, as on Linux, `nlwp` shows 1, and
+the zombie's CPU time comes from `proc_pid_rusage`. Linux keeps a zombie's count
+of minor faults, and Darwin does not, so `min_flt` shows `-` for a zombie.
 
 The columns that come from regions, `trs`, `drs`, `size` and `uss`, need a walk
 of the memory regions. The walk is slow, and only the helper can do it for
@@ -244,9 +264,12 @@ binary on macOS 27. On Linux, a process's owner can read its environment from
 
 Darwin's `getsid` fails for a zombie, whereas Linux reports a zombie's session.
 A process group is always in one session, so when the tools cannot read a
-process's session, `pgrep -s` takes it from another process in the same process
-group. `pgrep -s` never selects a zombie unless another member of its process
-group has a session that the source can read.
+process's session, they take it from another process in the same process group.
+`pgrep -s` and `ps -s` use that session to select the process, and `ps` shows it
+in the `sid` and `sess` columns. `ps` reads the identity of every process to
+find the other members of the group, even when `-p` or `-q` lists the processes.
+The tools find no session for a zombie unless another member of its process
+group has a session that the source can read, and `ps` then shows `-`.
 
 ## Start times
 
@@ -258,6 +281,88 @@ which `mach_continuous_time` gives, from the time of the snapshot to find the
 time of boot, then count the ticks between boot and the start. If the wall clock
 has been set since a process started, the process's start tick is offset by the
 size of the change, but never to before tick 0.
+
+`ps`'s start columns, `stime`, `start_time`, `start`, `bsdstart` and `lstart`,
+show the start time from `kinfo_proc` in whole seconds. procps-ng adds the start
+tick to the time of boot in `/proc/stat`, which has whole seconds, so on Linux
+these columns can be a second earlier than the real start. `etime`, `etimes`,
+`%cpu`, `c` and `cp` count clock ticks since boot, as procps-ng does.
+
+## Page faults
+
+procps-ng's `maj_flt` and `min_flt` columns show Linux's counts of the page
+faults that read from disk and of the others. Darwin's `PROC_PIDTASKINFO` counts
+every fault in `pti_faults`, including copy-on-write faults, and its page-ins in
+`pti_pageins`. A page-in approximates a fault that reads from disk: Darwin also
+counts a page-in for the first fault on a page that an earlier clustered read
+brought into memory. The tools subtract the page-ins from the faults to
+approximate the minor faults:
+
+| Column                        | Linux source       | Darwin source                                                      |
+| ----------------------------- | ------------------ | ------------------------------------------------------------------ |
+| `maj_flt`, `majflt`, `pagein` | `majflt` in `stat` | `pti_pageins`, or `ri_pageins` from `proc_pid_rusage` for a zombie |
+| `min_flt`, `minflt`           | `minflt` in `stat` | `pti_faults` minus `pti_pageins`, or `-` for a zombie              |
+
+## Filesystem IDs
+
+Linux keeps a user and a group ID for file access, which are normally the
+effective IDs. Darwin has no such IDs, so `fuid`, `fuser`, `fgid`, `fgroup`,
+`fsuid`, `fsuser`, `fsgid` and `fsgroup` show the effective IDs from
+`kinfo_proc`.
+
+## Signal masks
+
+`ps`'s `caught` and `ignored` columns show `p_sigcatch` and `p_sigignore` from
+`kinfo_proc` as procps-ng shows the masks of `/proc/<pid>/status`: 16
+hexadecimal digits, or the last 8 when the line has no room for 16. Bit `n - 1`
+is set for Darwin's signal `n`, so the masks use Darwin's numbers, as `pkill`
+does. `SIGUSR1`, for example, is bit 29 on Darwin and bit 9 on Linux. Darwin
+also counts `SIGURG`, `SIGCHLD`, `SIGIO`, `SIGWINCH` and `SIGINFO`, whose
+default action is to ignore them, as ignored, whereas Linux counts only the
+signals that the process has set to `SIG_IGN`. XNU keeps both kinds in one mask,
+from which it fills `p_sigignore`, and no call that the tools use reports a
+process's signal actions, so the tools cannot tell a `SIG_IGN` of one of these
+signals from its default action. `SIGCONT`, whose default action also ignores it
+when the process is not stopped, is the exception. XNU never sets its bit in
+that mask, even when the process sets `SIGCONT` to `SIG_IGN`, so `ignored` never
+shows `SIGCONT`, whereas Linux shows it for a process that ignores it.
+`kinfo_proc` reports 0 for every pending and blocked signal, so `pending`,
+`blocked` and the other masks of pending and blocked signals show `-`.
+
+## Terminal names
+
+`ps`'s `tty`, `tt` and `tname` columns show the name of the controlling terminal
+in `/dev`, from `devname_r`, such as `ttys001` or `console`. Linux's terminals
+have names such as `pts/0` and `tty1`. `tty4` removes `tty` from the start of
+the name, as procps-ng removes it, so it shows `s001`. A process without a
+controlling terminal shows `?`. Linux numbers no terminal 0, whereas Darwin's
+console has the device number 0, so the tools decide whether a process has a
+terminal from `kinfo_proc` and not from the device number.
+
+## Sorting
+
+procps-ng sorts text with `strcoll`, which follows the `LC_COLLATE` locale. `ps`
+compares the bytes, as `strcoll` does in the C locale, so in other locales the
+order of names and command lines can differ from Linux's. A value that the
+source could not read, such as another user's CPU time without the helper, sorts
+as a value lower than every other value: first in ascending order and last in
+descending order.
+
+## Character widths
+
+`ps` cuts a column's text to the screen cells that the column has, as procps-ng
+does. In a UTF-8 locale, procps-ng replaces each character that glibc's
+`iswprint` rejects with `?`, and counts the cells of the others with glibc's
+`wcwidth`. Darwin's classes and widths differ from glibc's, and Darwin's
+`iswprint` rejects characters such as emoji. `ps` therefore uses tables from
+glibc 2.44's locale data, which `scripts/generate-glibc-ctype` converts: glibc's
+`print` class and the widths of its UTF-8 character map. For 8976 code points
+sampled across Unicode, `ps` and procps-ng in the reference container print the
+same text and pad it to the same width. The reference container uses the glibc
+of the flake's nixpkgs. The flake's `glibc-ctype` check regenerates the tables
+from that glibc's source, with nixpkgs' patches applied, and fails when they
+differ from the committed file, so an update of nixpkgs that changes glibc's
+version or locale data needs new tables.
 
 ## `ps --info`
 
@@ -273,15 +378,15 @@ versions that it was compiled with, which `ps` leaves out.
 ## `kernel_task`
 
 `kernel_task` has process ID 0, and even root cannot read its executable path,
-its command line or its memory regions. Its `exe` column therefore shows `-`,
-its command line shows `[kernel_task]` as for a Linux kernel thread, and the
-region columns show `-`.
+its command line or its memory regions. Where `top` shows it, its `exe` column
+therefore shows `-`, its command line shows `[kernel_task]` as for a Linux
+kernel thread, and the region columns show `-`.
 
-Linux has no process with ID 0, so procps-ng never selects one. `pgrep` and
-`pkill` leave out `kernel_task`. `kill(2)` reads the process ID 0 as the
-caller's process group, so a script that passes `pgrep`'s output to `kill` would
-otherwise signal its own process group, and so would `pkill`. `Pid::send_signal`
-also refuses pid 0.
+Linux does not show its idle tasks, which have process ID 0, in `/proc`, so
+procps-ng never selects a process with ID 0. `ps`, `pgrep` and `pkill` leave out
+`kernel_task`. `kill(2)` reads the process ID 0 as the caller's process group,
+so a script that passes `pgrep`'s output to `kill` would otherwise signal its
+own process group, and so would `pkill`. `Pid::send_signal` also refuses pid 0.
 
 ## Signals
 

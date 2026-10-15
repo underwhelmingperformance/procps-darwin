@@ -23,6 +23,7 @@ use crate::{
         help::{self, Section},
         options::Screen,
     },
+    strerror::describe,
 };
 
 /// The longest message that procps-ng keeps for an unknown format specifier:
@@ -352,6 +353,26 @@ impl InternalError {
     }
 }
 
+/// A part of `ps` that this project does not implement yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub(crate) enum Unimplemented {
+    /// Rows for threads: `-L`, `-T`, `H`, `m` and `-m` (task 5.5).
+    #[error("the thread display is not implemented yet")]
+    Threads,
+    /// A process tree: `-H`, `f` and `--forest` (task 5.5).
+    #[error("the process tree is not implemented yet")]
+    Forest,
+    /// An option that changes how columns show their values (task 5.6).
+    #[error("the option {0} is not implemented yet")]
+    Option(&'static str),
+    /// A format specifier (task 5.4).
+    #[error("the format specifier {0} is not implemented yet")]
+    Specifier(&'static str),
+    /// A sort key (task 5.4).
+    #[error("sorting by {0} is not implemented yet")]
+    SortKey(&'static str),
+}
+
 /// The exit status of every error, as in procps-ng.
 const STATUS: u8 = 1;
 
@@ -370,9 +391,29 @@ pub(crate) enum PsError {
     /// `argv[0]` and its source position.
     #[error(transparent)]
     Internal(#[from] InternalError),
-    /// Listing processes is not implemented yet.
-    #[error("listing processes is not implemented yet")]
-    Unimplemented,
+    /// The command line needs a part of `ps` that this project does not
+    /// implement yet.
+    #[error(transparent)]
+    Unimplemented(Unimplemented),
+    /// `PROCPS_DARWIN_SOURCE` is set to a value that is not a source.
+    #[error(transparent)]
+    Choice(#[from] procps_core::ChoiceError),
+    /// The source could not take a snapshot of the processes.
+    #[error("cannot read the processes")]
+    Source {
+        /// Whether the selection is a list of pids that procps-ng reads
+        /// directly, as for `-q` or a `-p` on its own. The message then
+        /// contains `select`, and otherwise it contains `reap`.
+        quick: bool,
+        /// Whether `ps` sorts the processes.
+        sorted: bool,
+        /// Why the source could not take the snapshot.
+        #[source]
+        error: procps_core::SourceError,
+    },
+    /// `ps` sorts the processes, and the snapshot has none.
+    #[error("the process table is empty")]
+    EmptyProcessTable,
     /// A write to standard output or standard error failed.
     #[error(transparent)]
     Write(#[from] WriteFailure),
@@ -400,13 +441,34 @@ impl PsError {
                 b"\n",
             ]
             .concat(),
-            Self::Unimplemented => [
+            Self::Unimplemented(_) => [
                 program.as_bytes(),
                 b": ",
                 self.to_string().as_bytes(),
                 b"\n",
             ]
             .concat(),
+            Self::Choice(error) => {
+                [program.as_bytes(), b": ", describe(error).as_bytes(), b"\n"].concat()
+            }
+            // procps-ng's `fancy_spew`, which sorts, prints its message
+            // without the error's description.
+            Self::Source { sorted: true, .. } | Self::EmptyProcessTable => {
+                b"fatal library error, reap\n".to_vec()
+            }
+            Self::Source { quick, error, .. } => {
+                let read: &[u8] = if *quick { b"select" } else { b"reap" };
+
+                [
+                    program.as_bytes(),
+                    b": Fatal library error, unable to ",
+                    read,
+                    b" pids: ",
+                    describe(error).as_bytes(),
+                    b"\n",
+                ]
+                .concat()
+            }
             Self::Write(WriteFailure::Stdout(Some(error))) => [
                 program.as_bytes(),
                 b": write error: ",
@@ -444,9 +506,10 @@ mod tests {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
     use pretty_assertions::assert_eq;
+    use procps_core::SourceError;
     use rstest::rstest;
 
-    use super::{InternalError, PsError, QuickPidConflict, SyntaxError};
+    use super::{InternalError, PsError, QuickPidConflict, SyntaxError, Unimplemented};
     use crate::{
         output::WriteFailure,
         ps::help::{Section, usage},
@@ -505,6 +568,23 @@ mod tests {
     )]
     #[case::earlier_write(PsError::Write(WriteFailure::Stdout(None)), &b"ps: write error\n"[..])]
     #[case::stderr(PsError::Write(WriteFailure::Stderr), &b""[..])]
+    #[case::unimplemented(
+        PsError::Unimplemented(Unimplemented::Specifier("fds")),
+        &b"ps: the format specifier fds is not implemented yet\n"[..]
+    )]
+    #[case::source(
+        PsError::Source { quick: false, sorted: false, error: SourceError::TimedOut },
+        &b"ps: Fatal library error, unable to reap pids: the snapshot reached its time limit\n"[..]
+    )]
+    #[case::quick_source(
+        PsError::Source { quick: true, sorted: false, error: SourceError::TimedOut },
+        &b"ps: Fatal library error, unable to select pids: the snapshot reached its time limit\n"[..]
+    )]
+    #[case::sorted_source(
+        PsError::Source { quick: false, sorted: true, error: SourceError::TimedOut },
+        &b"fatal library error, reap\n"[..]
+    )]
+    #[case::empty(PsError::EmptyProcessTable, &b"fatal library error, reap\n"[..])]
     fn an_error_is_written_as_procps_ng_writes_it(#[case] error: PsError, #[case] expected: &[u8]) {
         assert_eq!(rendered(&error), expected);
     }

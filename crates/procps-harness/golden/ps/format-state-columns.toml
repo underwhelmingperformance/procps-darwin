@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+  PID STAT S S
+{a1} S    S S
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

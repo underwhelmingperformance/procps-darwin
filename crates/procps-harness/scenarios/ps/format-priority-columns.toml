@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "the priority columns of a timesharing process"
+command = ["ps", "-o", "ni,nice,pri,opri,intpri,priority,pri_foo,pri_bar,pri_baz,pri_api,class,cls,policy,sched,rtprio", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"

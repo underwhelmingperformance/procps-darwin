@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+  PID COMMAND
+{a1} harness-alpha --procps-h
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

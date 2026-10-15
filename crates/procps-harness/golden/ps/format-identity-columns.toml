@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+  PID  PPID  PGID  PGRP   SID  SESS  SESS TPGID  TGID
+{a1} {session} {session} {session} {session} {session} {session}    -1 {a1}
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+     PID COMMAND PPID
+   {a1} harn {session}
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

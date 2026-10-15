@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "with no process selected, ps prints the header and exits with status 1"
+command = ["ps", "--ppid", "{a1}", "-o", "pid,comm"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"

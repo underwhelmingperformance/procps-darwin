@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+COMMAND         CMD             COMMAND         COMMAND  CMD                         COMMAND                     COMMAND
+harness-alpha   harness-alpha   harness-alpha   harness- harness-alpha --procps-harn harness-alpha --procps-harn harness-alpha --procps-harness-fixture
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

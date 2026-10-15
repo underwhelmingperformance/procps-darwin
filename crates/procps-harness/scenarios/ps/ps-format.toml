@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 description = "PS_FORMAT replaces the default columns"
-pending = true
 command = ["ps", "-p", "{a1}"]
 
 [[fixture]]

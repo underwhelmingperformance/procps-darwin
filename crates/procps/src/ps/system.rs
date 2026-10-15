@@ -126,6 +126,12 @@ pub(crate) trait System {
     /// The ID of the group `name`, as `getgrnam` returns it.
     fn group(&self, name: &OsStr) -> Option<u32>;
 
+    /// The name of the user `uid`, as `getpwuid` returns it.
+    fn user_name(&self, uid: u32) -> Option<OsString>;
+
+    /// The name of the group `gid`, as `getgrgid` returns it.
+    fn group_name(&self, gid: u32) -> Option<OsString>;
+
     /// The status of the file at `path`, or `None` if `stat` fails.
     fn file(&self, path: &OsStr) -> Option<FileStatus>;
 
@@ -184,6 +190,14 @@ impl System for Host {
 
     fn group(&self, name: &OsStr) -> Option<u32> {
         Gid::from_name(name).ok().flatten().map(u32::from)
+    }
+
+    fn user_name(&self, uid: u32) -> Option<OsString> {
+        Uid::from(uid).name().ok().flatten()
+    }
+
+    fn group_name(&self, gid: u32) -> Option<OsString> {
+        Gid::from(gid).name().ok().flatten()
     }
 
     fn file(&self, path: &OsStr) -> Option<FileStatus> {
@@ -295,6 +309,20 @@ pub(crate) mod testing {
 
         fn group(&self, name: &OsStr) -> Option<u32> {
             self.groups.get(name.to_str()?).copied()
+        }
+
+        fn user_name(&self, uid: u32) -> Option<OsString> {
+            self.users
+                .iter()
+                .find(|&(_, &id)| id == uid)
+                .map(|(&name, _)| OsString::from(name))
+        }
+
+        fn group_name(&self, gid: u32) -> Option<OsString> {
+            self.groups
+                .iter()
+                .find(|&(_, &id)| id == gid)
+                .map(|(&name, _)| OsString::from(name))
         }
 
         fn file(&self, path: &OsStr) -> Option<FileStatus> {

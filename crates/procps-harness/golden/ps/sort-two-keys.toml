@@ -1,0 +1,14 @@
+status = 0
+stdout = """
+{a2} harness-alpha
+{a1} harness-alpha
+{b1} harness-beta
+{command} ps
+{session} session-leader
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
+a2 = "running"
+b1 = "running"

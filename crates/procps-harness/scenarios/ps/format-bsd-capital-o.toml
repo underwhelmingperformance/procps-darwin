@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "BSD's O with a format list adds columns after the pid"
+command = ["ps", "O", "ppid", "p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"

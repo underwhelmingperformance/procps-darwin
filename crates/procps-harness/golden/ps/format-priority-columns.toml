@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+ NI  NI PRI PRI PRI PRI FOO BAR BAZ API CLS CLS POL SCH RTPRIO
+  0   0  19  80  80  20   0  21 120 -21 TS   TS TS    0      -
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
