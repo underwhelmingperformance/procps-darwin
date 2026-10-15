@@ -389,6 +389,67 @@ impl Process {
                 .collect(),
         )
     }
+
+    /// The environment, formatted as procps-ng's `ENVIRON` item. procps-ng
+    /// makes that item from `/proc/<pid>/environ` with `fill_environ_cvt`: it
+    /// joins the variables with spaces, replaces newlines with spaces, and
+    /// escapes the result. An empty or unreadable environment is `-`.
+    ///
+    /// ```
+    /// use std::ffi::OsString;
+    ///
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Charset, Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let mut process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    /// process.environment = Some(Field::Available(vec![
+    ///     OsString::from("HOME=/"),
+    ///     OsString::from("TERM=vt100"),
+    /// ]));
+    ///
+    /// assert_eq!(
+    ///     process.linux_environment_line(Charset::Utf8),
+    ///     "HOME=/ TERM=vt100"
+    /// );
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn linux_environment_line(&self, charset: Charset) -> OsString {
+        let line = match &self.environment {
+            Some(Field::Available(environment)) => unvectored(environment),
+            _ => Vec::new(),
+        };
+
+        if line.is_empty() {
+            return OsString::from("-");
+        }
+
+        escape(&line, charset)
+    }
+
+    /// The path of the executable as procps-ng's `EXE` item shows it: escaped,
+    /// or `-` if the source could not read it.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Charset, Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    ///
+    /// assert_eq!(process.linux_executable(Charset::Utf8), "-");
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn linux_executable(&self, charset: Charset) -> OsString {
+        match &self.executable {
+            Field::Available(path) if !path.as_os_str().is_empty() => {
+                escape(path.as_os_str().as_bytes(), charset)
+            }
+            _ => OsString::from("-"),
+        }
+    }
 }
 
 /// The arguments as procps-ng's `read_unvectored` reads `/proc/<pid>/cmdline`
@@ -428,7 +489,7 @@ fn unvectored(arguments: &[OsString]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
     use darwin_proc::Status;
     use pretty_assertions::assert_eq;
@@ -611,5 +672,37 @@ mod tests {
         let process = process("worker", Status::Running, arguments);
 
         assert_eq!(process.linux_command_line_vector(Charset::Utf8), expected);
+    }
+
+    #[rstest]
+    #[case::variables(Some(Field::Available(vec!["A=1", "B=2"])), "A=1 B=2")]
+    #[case::newline(Some(Field::Available(vec!["A=1\nB"])), "A=1 B")]
+    #[case::escaped(Some(Field::Available(vec!["A=\t"])), "A=?")]
+    #[case::empty_variable(Some(Field::Available(vec![""])), "-")]
+    #[case::none(Some(Field::Available(vec![])), "-")]
+    #[case::denied(Some(Field::Denied), "-")]
+    #[case::not_requested(None, "-")]
+    fn the_environment_line_is_procps_ng_s(
+        #[case] environment: Option<Field<Vec<&str>>>,
+        #[case] expected: &str,
+    ) {
+        let mut process = process("worker", Status::Running, None);
+        process.environment = environment.map(|field| {
+            field.map(|variables| variables.into_iter().map(OsString::from).collect())
+        });
+
+        assert_eq!(process.linux_environment_line(Charset::Utf8), expected);
+    }
+
+    #[rstest]
+    #[case::path(Field::Available(PathBuf::from("/bin/sleep")), "/bin/sleep")]
+    #[case::escaped(Field::Available(PathBuf::from("/tmp/a\tb")), "/tmp/a?b")]
+    #[case::unsupported(Field::Unsupported, "-")]
+    #[case::failed(Field::Failed, "-")]
+    fn the_executable_is_procps_ng_s(#[case] executable: Field<PathBuf>, #[case] expected: &str) {
+        let mut process = process("worker", Status::Running, None);
+        process.executable = executable;
+
+        assert_eq!(process.linux_executable(Charset::Utf8), expected);
     }
 }
