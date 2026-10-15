@@ -81,7 +81,10 @@ exporter.
   and `darwin-proc` opts out with `#![expect(unsafe_code, reason = "...")]` at
   its root.
 - The tools read process data only through the `ProcessSource` trait, so tests
-  can substitute `FixtureSource`.
+  can substitute `FixtureSource`. The exception is `pkill`'s read of each
+  process's start time just before it sends a signal, which always asks the
+  local kernel, because `kill(2)` acts on the kernel's processes at that moment.
+  Tests replace that read through the `Signaller` trait.
 - A `SnapshotRequest` lists only the field groups that a command needs, because
   reading arguments and environment, and walking memory regions, are slow or
   restricted.

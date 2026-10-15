@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "with -c, --list-full still makes pkill -e print each command line, then the number of matching processes"
+command = ["pkill", "-0", "-s", "0", "-e", "-c", "--list-full", "harness-alpha"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "a2"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

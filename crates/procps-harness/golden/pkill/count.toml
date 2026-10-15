@@ -1,0 +1,10 @@
+status = 0
+stdout = """
+2
+"""
+stderr = ""
+
+[fixtures]
+a1 = "killed by SIGTERM"
+a2 = "killed by SIGTERM"
+b1 = "running"

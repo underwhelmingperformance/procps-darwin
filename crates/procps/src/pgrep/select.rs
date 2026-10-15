@@ -24,7 +24,7 @@ use procps_core::{
 
 use crate::pgrep::{
     Mode, Options, PgrepError,
-    options::{Listing, Pick, Report, Tasks},
+    options::{Listing, Pick, Tasks},
 };
 
 /// What the selection and the report need to know about the running tool.
@@ -47,7 +47,7 @@ pub(crate) struct Invocation<'a> {
 pub(crate) fn request(options: &Options) -> SnapshotRequest {
     let mut request = SnapshotRequest::default();
 
-    if options.matching.full || options.output.report == Report::List(Listing::CommandLines) {
+    if options.matching.full || options.output.listing == Listing::CommandLines {
         request = request.with(FieldGroup::Arguments);
     }
 
@@ -173,6 +173,20 @@ fn tasks(snapshot: &Snapshot, tasks: Tasks) -> Vec<LinuxTask<'_>> {
         .collect()
 }
 
+/// A task that the selection chose.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Selected<'a> {
+    pub(crate) task: LinuxTask<'a>,
+    /// The task whose name or command line is in procps-ng's `cmdoutput` buffer
+    /// when procps-ng selects `task`, or `None` while the buffer is still
+    /// empty. `pkill -e` prints that text. procps-ng allocates the buffer with
+    /// `xmalloc`, which does not clear it. glibc normally serves the 128 KiB
+    /// request with `mmap`, whose pages are zeroed, so the buffer starts empty
+    /// in the reference scenarios, but glibc's allocation tunables can change
+    /// that. This implementation always starts with an empty buffer.
+    pub(crate) output: Option<LinuxTask<'a>>,
+}
+
 /// The task that `-n` or `-o` keeps so far, as procps-ng's
 /// `saved_start_time` and `saved_pid` record it.
 #[derive(Clone, Copy, Debug)]
@@ -196,7 +210,7 @@ impl Selection<'_> {
         &self,
         snapshot: &'s Snapshot,
         invocation: &Invocation<'_>,
-    ) -> Vec<LinuxTask<'s>> {
+    ) -> Vec<Selected<'s>> {
         select(self.options, self.regex.as_ref(), snapshot, invocation)
     }
 }
@@ -206,7 +220,7 @@ fn select<'a>(
     regex: Option<&Regex>,
     snapshot: &'a Snapshot,
     invocation: &Invocation<'_>,
-) -> Vec<LinuxTask<'a>> {
+) -> Vec<Selected<'a>> {
     let clock = Clock::new(snapshot);
     let ancestors = if options.filters.ignore_ancestors {
         ancestors(snapshot, invocation.myself)
@@ -221,6 +235,7 @@ fn select<'a>(
         },
     };
     let mut selected = Vec::new();
+    let mut output = None;
 
     for task in tasks(snapshot, options.tasks) {
         let pid = task.process().info.pid;
@@ -248,6 +263,15 @@ fn select<'a>(
             (Pick::Oldest, Some(saved)) if start > saved => false,
             _ => passes_filters(options, snapshot, clock, &task, invocation.charset),
         };
+
+        // procps-ng refreshes its output buffer under this condition, before it
+        // matches the pattern, whether or not it then selects the task.
+        if options.output.listing != Listing::Ids
+            || options.output.shell_quote
+            || (matches && regex.is_some())
+        {
+            output = Some(task);
+        }
 
         if matches && let Some(regex) = regex {
             let text = if options.matching.full {
@@ -283,7 +307,7 @@ fn select<'a>(
             selected.clear();
         }
 
-        selected.push(task);
+        selected.push(Selected { task, output });
     }
 
     selected
@@ -450,7 +474,7 @@ mod tests {
     };
     use pretty_assertions::assert_eq;
     use procps_core::{
-        Charset, Field, FieldGroup, LinuxTask, Process, Snapshot, SnapshotRequest, testing::thread,
+        Charset, Field, FieldGroup, Process, Snapshot, SnapshotRequest, testing::thread,
     };
     use rstest::rstest;
 
@@ -645,7 +669,7 @@ mod tests {
 
         Ok(selected
             .iter()
-            .map(|task| task.process().info.pid.as_raw())
+            .map(|selected| selected.task.process().info.pid.as_raw())
             .collect())
     }
 
@@ -781,7 +805,7 @@ mod tests {
         let options = options(arguments)?;
         let selected = Selection::new(&options)?.select(&snapshot, &invocation(Charset::Utf8));
 
-        Ok(selected.iter().map(LinuxTask::id).collect())
+        Ok(selected.iter().map(|selected| selected.task.id()).collect())
     }
 
     #[rstest]

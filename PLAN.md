@@ -1005,8 +1005,7 @@ Darwin.
 `pgrep` prints the pids with the delimiter, or their number with `-c`, and
 nothing with `--quiet`. If no process matches, it prints procps-ng's warning
 when `-f` is not given and the pattern is longer than 15 bytes without a `|` or
-`[`. `pkill`'s signals are task 4.4. Until task 4.4 is done, `pkill` always
-exits with status 3.
+`[`.
 
 #### 4.3 Output (done)
 
@@ -1027,7 +1026,7 @@ tasks. `LinuxTask`, which gives each task's ID, name and state, is in
 `procps-core`, so `ps -L` can use it too. `docs/mappings.md` describes how
 Darwin's threads map to Linux's.
 
-#### 4.4 Signals
+#### 4.4 Signals (done)
 
 Send the signal with `kill(2)`. Task 4.1 parses the signal names and numbers for
 Darwin's signal set, which has `SIGINFO` and `SIGEMT` and no real-time signals.
@@ -1035,6 +1034,21 @@ Report failures in procps-ng's format, and with `-e` report each signal that
 `pkill` sends. Just before signalling, read each process's start time again and
 skip a process whose start time has changed, because its pid now belongs to
 another process.
+
+`pkill` sends each signal with `darwin_proc::Pid::send_signal`, as the invoking
+user, so the kernel's permission checks apply. `kill(2)` reads 0 as the caller's
+process group, -1 as every process that the caller may signal, and other
+negative pids as process groups, so `send_signal` refuses pids of 0 and below.
+`kernel_task` has pid 0, and the selection leaves it out. `pkill` ignores a
+process that has exited, prints `killing pid <pid> failed: <description>` for
+any other failure, prints each signalled process with `-e`, and exits with
+status 0 if `kill(2)` succeeded for any process. With `-c`, it prints the number
+of selected processes after the lines of `-e`.
+
+The read of each start time before the signal is the only read of process data
+that does not go through `ProcessSource`. It always asks the local kernel,
+because `kill(2)` acts on the processes that the kernel has at that moment.
+Tests replace the read and the signal through the `Signaller` trait.
 
 #### 4.5 Unsupported options (done)
 

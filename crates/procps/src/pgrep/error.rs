@@ -61,12 +61,12 @@ impl LinuxOption {
 /// An error that ends `pgrep` or `pkill`.
 ///
 /// Each variant has procps-ng's message and exit status, except that
-/// [`PgrepError::Unsupported`], [`PgrepError::Choice`], [`PgrepError::Source`]
-/// and [`PgrepError::Unimplemented`] have this project's own messages. The
-/// errors in reading the pid file, `-F` together with `-p`, and failed writes
-/// exit with status 1. [`PgrepError::Choice`], [`PgrepError::Source`] and
-/// [`PgrepError::Unimplemented`] are fatal errors, which exit with status 3,
-/// and every other variant exits with status 2.
+/// [`PgrepError::Unsupported`], [`PgrepError::Choice`] and
+/// [`PgrepError::Source`] have this project's own messages. The errors in
+/// reading the pid file, `-F` together with `-p`, and failed writes exit with
+/// status 1. [`PgrepError::Choice`] and [`PgrepError::Source`] are fatal
+/// errors, which exit with status 3, and every other variant exits with status
+/// 2.
 ///
 /// [`PgrepError::Usage`], [`PgrepError::UnknownNamespace`] and a failed write
 /// to standard error have a message only for `Display`, because procps-ng
@@ -142,8 +142,6 @@ pub enum PgrepError {
     Source(#[from] procps_core::SourceError),
     /// A write to standard output or standard error failed.
     Write(#[from] WriteFailure),
-    /// `pkill` cannot send signals yet.
-    Unimplemented,
 }
 
 /// How procps-ng lays out an error on standard error.
@@ -226,7 +224,7 @@ impl PgrepError {
             | Self::UnlockedPidfile(_)
             | Self::InvalidPidfile
             | Self::Write(_) => 1,
-            Self::Choice(_) | Self::Source(_) | Self::Unimplemented => 3,
+            Self::Choice(_) | Self::Source(_) => 3,
             _ => 2,
         }
     }
@@ -256,8 +254,7 @@ impl PgrepError {
             | Self::Write(WriteFailure::Stdout(_))
             | Self::Regex(_)
             | Self::Choice(_)
-            | Self::Source(_)
-            | Self::Unimplemented => Shape::Alone,
+            | Self::Source(_) => Shape::Alone,
         }
     }
 
@@ -310,7 +307,6 @@ impl PgrepError {
             Self::Regex(error) => text(&format!("regex error: {}", error.message)),
             Self::Choice(error) => text(&describe(error)),
             Self::Source(error) => text(&describe(error)),
-            Self::Unimplemented => text("pkill's signals are not implemented yet"),
         }
     }
 
@@ -436,11 +432,6 @@ mod tests {
         1
     )]
     #[case::stderr(PgrepError::Write(WriteFailure::Stderr), &b""[..], 1)]
-    #[case::unimplemented(
-        PgrepError::Unimplemented,
-        &b"pgrep: pkill's signals are not implemented yet\n"[..],
-        3
-    )]
     fn an_error_is_reported_as_procps_ng_reports_it(
         #[case] error: PgrepError,
         #[case] expected: &[u8],

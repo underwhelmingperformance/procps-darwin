@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "-e with -Q quotes each name"
+command = ["pkill", "-s", "0", "-e", "-Q", "harness-it"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "a2"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "q1"
+comm = "harness-it's"
