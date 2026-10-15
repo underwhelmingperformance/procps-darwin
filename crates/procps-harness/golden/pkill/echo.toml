@@ -1,0 +1,11 @@
+status = 0
+stdout = """
+harness-alpha killed (pid {a1})
+harness-alpha killed (pid {a2})
+"""
+stderr = ""
+
+[fixtures]
+a1 = "killed by SIGTERM"
+a2 = "killed by SIGTERM"
+b1 = "running"

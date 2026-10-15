@@ -1,0 +1,8 @@
+status = 0
+stdout = ""
+stderr = ""
+
+[fixtures]
+a1 = "stopped by SIGSTOP"
+a2 = "stopped by SIGSTOP"
+b1 = "running"

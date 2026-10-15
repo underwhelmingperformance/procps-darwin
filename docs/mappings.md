@@ -266,10 +266,11 @@ its command line or its memory regions. Its `exe` column therefore shows `-`,
 its command line shows `[kernel_task]` as for a Linux kernel thread, and the
 region columns show `-`.
 
-Linux has no process with ID 0, so procps-ng never selects one. `pgrep` leaves
-out `kernel_task`. A script that passes `pgrep`'s output to `kill` would
-otherwise send the signal to its own process group, because `kill` reads the
-process ID 0 as the caller's process group.
+Linux has no process with ID 0, so procps-ng never selects one. `pgrep` and
+`pkill` leave out `kernel_task`. `kill(2)` reads the process ID 0 as the
+caller's process group, so a script that passes `pgrep`'s output to `kill` would
+otherwise signal its own process group, and so would `pkill`. `Pid::send_signal`
+also refuses pid 0.
 
 ## Signals
 
@@ -540,5 +541,27 @@ state from `pth_name` and `pth_run_state` of `PROC_PIDTHREADID64INFO`.
   permissions, procps-ng lists every thread, because every user can read
   `/proc/<pid>/task`, although a mount option such as `hidepid` can withhold
   other users' processes. The helper reads the threads of every process.
+- `pkill` accepts `--lightweight` too. On Linux, `pkill` then sends the signal
+  to each thread's ID, and the kernel delivers the signal to the thread's
+  process. Darwin's thread IDs are not pids, so `pkill` sends the signal to each
+  thread's process instead. As on Linux, `pkill` sends the signal to a process
+  once for each of its threads, and `-e` reports the thread IDs.
 
 [process-state]: #process-state
+
+## Pid reuse before a signal
+
+procps-ng's `pkill` selects the processes, then opens a pidfd for each pid just
+before it signals the process. The pidfd refers to whichever process has the pid
+at that moment, so procps-ng signals a process that took the pid after the
+selection. Darwin has no pidfds. To avoid signalling such a process, `pkill`
+reads each process's start time again just before it sends the signal. If the
+process has exited or its start time differs from the snapshot's, `pkill` leaves
+it out. `pkill` is therefore stricter than procps-ng, but another process can
+still take the pid between the check and the signal.
+
+If the read fails for another reason, `pkill` prints `killing pid <pid> failed`
+with a description of the error, in the same form as for a failed signal, and
+does not signal the process. procps-ng has no such read, so it prints this
+message only when its signalling call fails, whether that call is
+`pidfd_send_signal`, `kill(2)` or `sigqueue`.

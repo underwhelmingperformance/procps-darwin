@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "without a pattern, pkill -e with --list-name prints each name, because --list-name makes procps-ng record each process's name"
+command = ["pkill", "-0", "-e", "--list-name", "-p", "{a1},{b1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

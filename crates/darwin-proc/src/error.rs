@@ -92,9 +92,10 @@ pub enum Call {
 /// An error from a call to the kernel.
 ///
 /// The tools show each case differently. They leave an exited process out of
-/// their output, and show `-` for a denied read. Data that the kernel does not
-/// provide can have its own form: procps-ng shows a process without arguments
-/// as `[comm]`.
+/// their output, and show `-` for a denied read. `pkill` skips a process that
+/// has exited, and reports a denied or failed signal as an error message. Data
+/// that the kernel does not provide can have its own form: procps-ng shows a
+/// process without arguments as `[comm]`.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The process does not exist, usually because it has exited.

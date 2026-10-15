@@ -114,7 +114,11 @@ pub(crate) struct Filters {
     pub(crate) ignore_ancestors: bool,
 }
 
-/// What the tool prints for each selected task.
+/// What `pgrep` prints for each task, as `-l` and `-a` decide. For a task that
+/// it signals, `pkill -e` prints procps-ng's output buffer: a name with `Ids`
+/// and `Names`, and a command line with `CommandLines`. The buffer can be
+/// empty or contain another task's text, as
+/// [`Selected::output`](crate::pgrep::select::Selected::output) describes.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum Listing {
     /// The task's ID.
@@ -127,20 +131,16 @@ pub(crate) enum Listing {
 }
 
 /// What `pgrep` prints about the selected tasks.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum Report {
-    /// Each task, separated by the delimiter.
-    List(Listing),
+    /// Each task, as [`Output::listing`] decides, separated by
+    /// [`Output::delimiter`].
+    #[default]
+    List,
     /// The number of selected tasks (`-c`, which wins over `--quiet`).
     Count,
     /// Nothing (`--quiet`).
     Quiet,
-}
-
-impl Default for Report {
-    fn default() -> Self {
-        Self::List(Listing::default())
-    }
 }
 
 /// How the tool prints what it selected.
@@ -148,6 +148,9 @@ impl Default for Report {
 pub(crate) struct Output {
     /// What `pgrep` prints.
     pub(crate) report: Report,
+    /// `-l` or `-a`. With `-c`, `pgrep` prints only the count, and `pkill -e`
+    /// still prints what `-l` or `-a` selects.
+    pub(crate) listing: Listing,
     /// `-d`: the delimiter between tasks.
     pub(crate) delimiter: OsString,
     /// `-Q`: quote names and command lines for the shell.
@@ -160,6 +163,7 @@ impl Default for Output {
     fn default() -> Self {
         Self {
             report: Report::default(),
+            listing: Listing::default(),
             delimiter: OsString::from("\n"),
             shell_quote: false,
             echo: false,
@@ -522,15 +526,19 @@ impl<'a, I: Inputs> Replay<'a, I> {
             Report::Count
         } else if given(FlagId::Quiet) {
             Report::Quiet
-        } else if given(FlagId::ListFull) {
-            Report::List(Listing::CommandLines)
-        } else if given(FlagId::ListName) {
-            Report::List(Listing::Names)
         } else {
-            Report::List(Listing::Ids)
+            Report::List
+        };
+        let listing = if given(FlagId::ListFull) {
+            Listing::CommandLines
+        } else if given(FlagId::ListName) {
+            Listing::Names
+        } else {
+            Listing::Ids
         };
         let options = &mut self.options;
         options.output.report = report;
+        options.output.listing = listing;
 
         match patterns.as_slice() {
             [pattern] => options.pattern = Some((*pattern).clone()),
@@ -1060,15 +1068,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::pids(&[], Report::List(Listing::Ids))]
-    #[case::names(&["-l"], Report::List(Listing::Names))]
-    #[case::command_lines_over_names(&["-l", "-a"], Report::List(Listing::CommandLines))]
-    #[case::quiet(&["--quiet"], Report::Quiet)]
-    #[case::count_over_quiet(&["--quiet", "-c"], Report::Count)]
-    #[case::count_over_names(&["-c", "-l"], Report::Count)]
+    #[case::pids(&[], Report::List, Listing::Ids)]
+    #[case::names(&["-l"], Report::List, Listing::Names)]
+    #[case::command_lines_over_names(&["-l", "-a"], Report::List, Listing::CommandLines)]
+    #[case::quiet(&["--quiet"], Report::Quiet, Listing::Ids)]
+    #[case::count_over_quiet(&["--quiet", "-c"], Report::Count, Listing::Ids)]
+    #[case::count_over_names(&["-c", "-l"], Report::Count, Listing::Names)]
     fn the_report_follows_procps_ng_s_precedence(
         #[case] flags: &[&str],
         #[case] report: Report,
+        #[case] listing: Listing,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let arguments: Vec<&str> = ["pgrep"]
             .iter()
@@ -1082,6 +1091,7 @@ mod tests {
             Options {
                 output: Output {
                     report,
+                    listing,
                     ..Output::default()
                 },
                 ..with_pattern()
@@ -1174,6 +1184,7 @@ mod tests {
                 },
                 output: Output {
                     report: Report::Count,
+                    listing: Listing::CommandLines,
                     delimiter: OsString::from(","),
                     shell_quote: true,
                     echo: false,
@@ -1557,7 +1568,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::alone(&["pgrep", "-d=x", "y"], Report::List(Listing::Ids))]
+    #[case::alone(&["pgrep", "-d=x", "y"], Report::List)]
     #[case::clustered(&["pgrep", "-cd=x", "y"], Report::Count)]
     fn an_attached_value_keeps_its_equals_sign(
         #[case] arguments: &[&str],

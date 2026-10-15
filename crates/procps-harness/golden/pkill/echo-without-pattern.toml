@@ -1,0 +1,11 @@
+status = 0
+stdout = """
+ killed (pid {session})
+ killed (pid {a1})
+ killed (pid {b1})
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
+b1 = "running"
