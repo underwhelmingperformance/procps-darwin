@@ -132,6 +132,17 @@ pub enum Error {
     /// The runner could not kill the session leader's process group.
     #[error("cannot kill the session leader's process group: {0}")]
     KillGroup(#[source] std::io::Error),
+    /// Members of the session leader's process group were still alive after
+    /// the runner had sent `SIGKILL` to the group repeatedly for `after`.
+    #[error(
+        "process group {group} still had members after the runner sent SIGKILL to it repeatedly for {after:?}"
+    )]
+    GroupSurvived {
+        /// The process group ID.
+        group: i32,
+        /// How long the runner sent `SIGKILL` to the group for.
+        after: std::time::Duration,
+    },
     /// The runner could not send the request to the session leader.
     #[error("cannot send the request to the session leader: {0}")]
     WriteRequest(#[source] std::io::Error),
