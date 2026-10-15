@@ -208,5 +208,8 @@ exporter.
   only if it has commits that no remote-tracking branch of that remote contains.
   CI checks each pull request and `main`. The tests are not part of the
   `pre-commit` hook, so run `just test` before each commit.
+- `just clippy` also checks `procps-harness` for `aarch64-unknown-linux-gnu`,
+  because the harness generates the golden files on Linux, and some of its code
+  compiles only there.
 - Commit messages use Conventional Commits, with bodies wrapped at 72 columns.
   The `commit-msg` hook checks them with wrapscallion.

@@ -72,13 +72,19 @@
     fenixPkgs = inputs.fenix.packages.${system};
     rustfmtNightly = fenixPkgs.latest.rustfmt;
 
-    rustToolchain = fenixPkgs.stable.withComponents [
-      "cargo"
-      "clippy"
-      "rust-src"
-      "rust-analyzer"
-      "rustc"
-    ];
+    # On aarch64-darwin, the toolchain also has the standard library for aarch64
+    # Linux, so that clippy can check the harness code that only Linux compiles.
+    rustToolchain = fenixPkgs.combine ([
+        (fenixPkgs.stable.withComponents [
+          "cargo"
+          "clippy"
+          "rust-src"
+          "rust-analyzer"
+          "rustc"
+        ])
+      ]
+      ++ lib.optional (system == "aarch64-darwin")
+      fenixPkgs.targets.aarch64-unknown-linux-gnu.stable.rust-std);
 
     craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
   in {

@@ -14,6 +14,32 @@
           cargoClippyExtraArgs = "--all-targets -- --deny warnings";
         });
 
+      # The harness generates the golden files on Linux, where it compiles code
+      # that the Darwin build leaves out.
+      clippy-linux = let
+        linuxArgs =
+          checkArgs
+          // {
+            pname = "procps-harness-linux";
+            cargoExtraArgs = "--locked -p procps-harness --target aarch64-unknown-linux-gnu";
+          };
+      in
+        craneLib.cargoClippy (linuxArgs
+          // {
+            # The toolchain has no linker for Linux, so the dependencies are
+            # checked for Linux, not built. Their build scripts and procedural
+            # macros still build for Darwin. With `doCheck = false`, Crane's
+            # default check arguments leave out `--all-targets`, which the
+            # dev-dependencies need.
+            cargoArtifacts = craneLib.buildDepsOnly (linuxArgs
+              // {
+                cargoBuildCommand = "cargoWithProfile check";
+                cargoCheckExtraArgs = "--all-targets";
+                doCheck = false;
+              });
+            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+          });
+
       doc = craneLib.cargoDoc (args
         // {
           cargoDocExtraArgs = "--no-deps";
