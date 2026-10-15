@@ -193,7 +193,8 @@ fn lead() -> Result<Report, Error> {
     };
     let path = request.tools.join(program);
 
-    // The runner stops the whole session if the command runs for too long.
+    // The runner kills this process and its process group if the command runs
+    // for too long.
     let child = Command::new(&path)
         .arg0(program)
         .args(arguments)

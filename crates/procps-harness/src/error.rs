@@ -95,8 +95,8 @@ pub enum Error {
         /// The last pid outside the range.
         last: u32,
     },
-    /// The scenario's session did not finish in time, so the runner killed
-    /// every process in it.
+    /// The session leader neither exited nor stopped in time, so the runner
+    /// sent `SIGKILL` to the leader and its process group.
     #[error("the scenario did not finish within {after:?}")]
     Timeout {
         /// How long the scenario was allowed to run.
@@ -106,6 +106,10 @@ pub enum Error {
     /// signals every process in its session.
     #[error("the session leader was killed by {0}")]
     LeaderSignalled(String),
+    /// A signal stopped the session leader. The scenario's command probably
+    /// signalled every process in the session.
+    #[error("the session leader was stopped by {0}")]
+    LeaderStopped(String),
     /// The session leader could not run the scenario.
     #[error("the session leader failed: {message}")]
     Session {

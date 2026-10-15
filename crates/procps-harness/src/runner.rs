@@ -16,7 +16,10 @@ use std::{
     time::Duration,
 };
 
-use rustix::process::{Pid, Signal};
+use rustix::{
+    io::Errno,
+    process::{Pid, Signal, WaitId, WaitIdOptions},
+};
 use tempfile::TempDir;
 
 use crate::{
@@ -32,7 +35,8 @@ use crate::{
 /// The procps-ng release that the golden files come from.
 const REFERENCE_VERSION: &str = "4.0.7";
 
-/// How a session leader ended.
+/// How a session leader ended. In each case the runner has sent `SIGKILL` to
+/// the leader and to its process group.
 enum SessionEnd {
     /// The leader exited before the timeout.
     Finished {
@@ -40,7 +44,9 @@ enum SessionEnd {
         stdout: Vec<u8>,
         stderr: Vec<u8>,
     },
-    /// The timeout passed, and the runner killed the session.
+    /// A signal stopped the leader. The string is the signal's name.
+    Stopped(String),
+    /// The timeout passed.
     TimedOut,
 }
 
@@ -76,8 +82,11 @@ const ATTEMPTS: usize = 20;
 /// changes when decoys run. Runs on several threads or in several processes
 /// therefore do not see each other's processes.
 ///
-/// When the leader exits, or the timeout passes, the runner kills every
-/// process left in the session.
+/// When the leader exits or stops, or the timeout passes, the runner sends
+/// `SIGKILL` to the leader and to its process group. A command must not stop
+/// the leader. The runner reports a stop that it sees, but it can miss a stop
+/// that a `SIGCONT` undoes at once, and the run then goes on, so the outcome
+/// depends on timing.
 #[derive(Clone, Debug)]
 pub struct Runner {
     tools: PathBuf,
@@ -279,7 +288,8 @@ impl Runner {
     /// # Errors
     ///
     /// Returns an error if a process cannot be started, the command does not
-    /// finish in time, or the command signals a decoy.
+    /// finish in time, the command signals a decoy, or a signal terminates or
+    /// stops the session leader.
     pub fn run(&self, scenario: &Scenario) -> Result<Outcome, Error> {
         self.run_with(scenario, true)
     }
@@ -352,15 +362,18 @@ impl Runner {
                 stdin.write_all(text.as_bytes()).map_err(io_error)?;
             }
 
-            let SessionEnd::Finished {
-                status,
-                stdout,
-                stderr,
-            } = self.wait_for_session(child).map_err(io_error)?
-            else {
-                return Err(Error::Timeout {
-                    after: self.timeout,
-                });
+            let (status, stdout, stderr) = match self.wait_for_session(child).map_err(io_error)? {
+                SessionEnd::Finished {
+                    status,
+                    stdout,
+                    stderr,
+                } => (status, stdout, stderr),
+                SessionEnd::Stopped(signal) => return Err(Error::LeaderStopped(signal)),
+                SessionEnd::TimedOut => {
+                    return Err(Error::Timeout {
+                        after: self.timeout,
+                    });
+                }
             };
 
             if let Some(signal) = status.signal() {
@@ -389,37 +402,62 @@ impl Runner {
         Err(Error::NoFreePids { last })
     }
 
-    /// Waits until the session leader exits or the timeout passes, then kills
-    /// every process left in its session.
+    /// Waits until the session leader exits or stops, or the timeout passes,
+    /// then sends `SIGKILL` to the leader and to its process group.
     fn wait_for_session(&self, mut leader: Child) -> std::io::Result<SessionEnd> {
         let pid = Pid::from_child(&leader);
-        let stdout = leader.stdout.take();
+        let stdout = read_in_background(leader.stdout.take());
         let stderr = read_in_background(leader.stderr.take());
         let (sender, receiver) = mpsc::channel();
 
-        // The leader's children have their own standard output, so the
-        // leader's closes only when the leader exits. `waitid` cannot wait
-        // for that without reaping the leader: macOS also returns when the
-        // leader stops.
-        std::thread::spawn(move || sender.send(read_all(stdout)));
+        // `NOWAIT` leaves the leader unreaped, so its pid cannot belong to
+        // another process until `leader.wait` below. Darwin reports a stop
+        // even without `STOPPED`, but Linux reports one only with it.
+        std::thread::spawn(move || {
+            let changed = loop {
+                match rustix::process::waitid(
+                    WaitId::Pid(pid),
+                    WaitIdOptions::EXITED | WaitIdOptions::STOPPED | WaitIdOptions::NOWAIT,
+                ) {
+                    Err(Errno::INTR) => {}
+                    changed => break changed,
+                }
+            };
+            let _ = sender
+                .send(changed.map(|change| change.and_then(|change| change.stopping_signal())));
+        });
 
-        let finished = receiver.recv_timeout(self.timeout);
+        let waited = receiver.recv_timeout(self.timeout);
 
-        // The leader is not reaped yet, so its pid, which is also the
-        // session's process group id, cannot belong to another process.
+        // The leader calls `setsid` itself, so the timeout can pass before its
+        // process group exists. The leader is killed first, so that it cannot
+        // create the group after the group is killed.
+        let _ = rustix::process::kill_process(pid, Signal::KILL);
         let _ = rustix::process::kill_process_group(pid, Signal::KILL);
 
-        let Ok(stdout) = finished else {
+        // The waiting thread returns once the leader has died. Waiting for it
+        // here keeps it from calling `waitid` after the leader is reaped, when
+        // the pid can belong to another child of the runner.
+        if waited.is_err() {
             let _ = receiver.recv();
-            leader.wait()?;
+        }
 
+        let status = leader.wait()?;
+        let stdout = stdout.join().unwrap_or_else(|_| Ok(Vec::new()))?;
+        let stderr = stderr.join().unwrap_or_else(|_| Ok(Vec::new()))?;
+
+        let Ok(changed) = waited else {
             return Ok(SessionEnd::TimedOut);
         };
 
+        if let Some(signal) = changed? {
+            return Ok(SessionEnd::Stopped(signal::name(signal)));
+        }
+
         Ok(SessionEnd::Finished {
-            status: leader.wait()?,
-            stdout: stdout?,
-            stderr: stderr.join().unwrap_or_else(|_| Ok(Vec::new()))?,
+            status,
+            stdout,
+            stderr,
         })
     }
 

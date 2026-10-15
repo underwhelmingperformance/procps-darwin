@@ -11,6 +11,8 @@ use std::{
     collections::BTreeMap,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    sync::mpsc::{self, RecvTimeoutError},
+    time::{Duration, Instant},
 };
 
 use assert_matches::assert_matches;
@@ -31,12 +33,18 @@ const TOOLS: &[(&str, &str)] = &[
         "/usr/bin/pkill -STOP -x harness-epsilon\n",
     ),
     ("stop-leader", "kill -STOP \"$1\"\n"),
+    ("stop-self", "kill -STOP $$\n"),
     ("kill-leader", "kill -TERM \"$1\"\n"),
     (
         "leave-behind",
         "/bin/sleep 30 </dev/null >/dev/null 2>&1 &\necho $! >\"$1\"\n",
     ),
     ("wait-for-child", "/bin/sleep 60\n"),
+    ("record-and-wait", "echo $$ >\"$1\"\nexec /bin/sleep 60\n"),
+    (
+        "record-and-stop-leader",
+        "echo $$ >\"$2\"\nkill -STOP \"$1\"\nexec /bin/sleep 60\n",
+    ),
     ("parent", "echo \"$1 $PPID\"\n"),
     ("signal", "kill -TERM \"$1\"\nkill -STOP \"$2\"\n"),
     ("record", "echo \"$1\" >\"$2\"\n"),
@@ -204,6 +212,43 @@ fn no_process_outlives_its_run(#[case] command: &[&str]) -> Result<(), Box<dyn s
     Ok(())
 }
 
+#[rstest]
+#[case::timed_out(
+    &["record-and-wait"],
+    Some(Duration::from_secs(30)),
+    |error: &Error| matches!(error, Error::Timeout { .. })
+)]
+#[case::stopped_leader(
+    &["record-and-stop-leader", "{session}"],
+    None,
+    |error: &Error| matches!(error, Error::LeaderStopped(signal) if signal == "SIGSTOP")
+)]
+fn the_command_does_not_outlive_a_run_that_fails(
+    #[case] command: &[&str],
+    #[case] timeout: Option<Duration>,
+    #[case] expected: fn(&Error) -> bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    // The command has to record its pid before the timeout passes.
+    let runner = match timeout {
+        Some(timeout) => tools.runner.clone().with_timeout(timeout),
+        None => tools.runner.clone(),
+    };
+    let record = tools.directory.path().join("pid");
+    let mut command = command.to_vec();
+    command.push(path_text(&record)?);
+
+    assert_matches!(
+        run_or_give_up(runner, scenario(&command, FIXTURES)?)?,
+        Err(error) if expected(&error)
+    );
+    let pid = recorded_pid(&record)?;
+
+    assert_eq!(living(|info| info.pid == pid)?, []);
+
+    Ok(())
+}
+
 // The next tests run commands that act outside their session, so each uses a
 // process name that no other test uses.
 const GAMMA: &str = r#"
@@ -354,19 +399,143 @@ fn another_release_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Why [`kill_children`] could not kill the children of the test process.
+#[derive(Debug, thiserror::Error)]
+enum KillError {
+    #[error("cannot read the process table")]
+    Processes(#[from] RecordError),
+    #[error("cannot kill process {pid} or the process group that it leads")]
+    Kill {
+        pid: Pid,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "the process group of {pid} still had members after the test had sent SIGKILL to it for \
+         {GROUP_KILL_LIMIT:?}"
+    )]
+    Survived { pid: Pid },
+}
+
+/// A run that [`run_or_give_up`] stopped waiting for.
+#[derive(Debug, thiserror::Error)]
+enum GaveUp {
+    /// The test killed these children of the test process, which are the
+    /// session leaders and decoys of the runs, and the process groups that
+    /// they lead.
+    #[error(
+        "the run did not return within two minutes; the test killed these children of the test \
+         process and the process groups that they lead: {0:?}"
+    )]
+    Killed(Vec<Pid>),
+    #[error("the run did not return within two minutes, and the test could not kill its children")]
+    NotKilled(#[from] KillError),
+    #[error("the thread of the run ended without returning the run's outcome")]
+    RunLost,
+}
+
+/// How long [`kill_children`] goes on killing a process group whose members are
+/// still alive.
+const GROUP_KILL_LIMIT: Duration = Duration::from_secs(10);
+
+/// Sends `SIGKILL` to `pid` and to the process group that it leads. XNU's
+/// `killpg` misses a child that a member forks during the call, so the group
+/// kill is repeated until `killpg` fails with `ESRCH`, when the group does not
+/// exist, or with `EPERM`, once only zombies remain. If members are still alive
+/// after [`GROUP_KILL_LIMIT`], the function returns [`KillError::Survived`].
+fn kill_with_group(pid: Pid) -> Result<(), KillError> {
+    let failed = |source: rustix::io::Errno| KillError::Kill {
+        pid,
+        source: source.into(),
+    };
+    let Some(child) = rustix::process::Pid::from_raw(pid.as_raw()) else {
+        return Ok(());
+    };
+    let deadline = Instant::now() + GROUP_KILL_LIMIT;
+
+    loop {
+        match rustix::process::kill_process_group(child, rustix::process::Signal::KILL) {
+            Ok(()) => {}
+            Err(rustix::io::Errno::SRCH | rustix::io::Errno::PERM) => break,
+            Err(errno) => return Err(failed(errno)),
+        }
+
+        if Instant::now() >= deadline {
+            return Err(KillError::Survived { pid });
+        }
+
+        std::thread::yield_now();
+    }
+
+    match rustix::process::kill_process(child, rustix::process::Signal::KILL) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(errno) => Err(failed(errno)),
+    }
+}
+
+/// Kills each living child of the test process, and the process group that it
+/// leads, and returns their pids. A session leader leads a group with its
+/// fixtures and its command, and a decoy leads no group. This also ends the
+/// runs of other tests, which then fail. When the kill of one child fails, the
+/// function still kills the others, and then returns the first failure.
+fn kill_children() -> Result<Vec<Pid>, KillError> {
+    let myself = Pid::current();
+    let children = living(|info| info.ppid == myself)?;
+    let mut first_failure = None;
+
+    for &child in &children {
+        if let Err(failure) = kill_with_group(child) {
+            first_failure.get_or_insert(failure);
+        }
+    }
+
+    match first_failure {
+        Some(failure) => Err(failure),
+        None => Ok(children),
+    }
+}
+
+/// What `runner` reports for `scenario`. Returns [`GaveUp`] if the run has not
+/// returned after two minutes, or if its thread ends without returning the
+/// outcome. The test then fails.
+fn run_or_give_up(runner: Runner, scenario: Scenario) -> Result<Result<Outcome, Error>, GaveUp> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || sender.send(runner.run(&scenario)));
+
+    match receiver.recv_timeout(Duration::from_secs(120)) {
+        Ok(outcome) => Ok(outcome),
+        Err(RecvTimeoutError::Timeout) => Err(GaveUp::Killed(kill_children()?)),
+        Err(RecvTimeoutError::Disconnected) => Err(GaveUp::RunLost),
+    }
+}
+
+#[test]
+fn a_command_that_stops_the_session_leader_is_an_error() -> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+
+    assert_matches!(
+        run_or_give_up(tools.runner, scenario(&["stop-leader", "{session}"], FIXTURES)?)?,
+        Err(Error::LeaderStopped(signal)) if signal == "SIGSTOP"
+    );
+
+    Ok(())
+}
+
 #[rstest]
-#[case::waiting_for_a_child(&["wait-for-child"])]
-#[case::stopping_the_session_leader(&["stop-leader", "{session}"])]
+#[case::waiting_for_a_child(&["wait-for-child"], Duration::from_millis(500))]
+// A timeout of zero normally passes before the session leader calls `setsid`.
+// The command stops itself, so only the timeout can end the run.
+#[case::before_the_session_starts(&["stop-self"], Duration::ZERO)]
 fn a_run_that_takes_too_long_is_stopped(
     #[case] command: &[&str],
+    #[case] timeout: Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tools = Tools::new()?;
-    let timeout = std::time::Duration::from_millis(500);
     let runner = Runner::new(tools.directory.path(), env!("CARGO_BIN_EXE_procps-harness"))
         .with_timeout(timeout);
 
     assert_matches!(
-        runner.run(&scenario(command, FIXTURES)?),
+        run_or_give_up(runner, scenario(command, FIXTURES)?)?,
         Err(Error::Timeout { after }) if after == timeout
     );
 
