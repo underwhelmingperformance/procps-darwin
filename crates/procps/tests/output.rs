@@ -11,7 +11,8 @@
 //! closed standard stream fails with `EINVAL` instead, as a write to
 //! procps-ng's epoll descriptor does. procps-ng's `ps` has no epoll descriptor.
 //! A write to a pipe whose read end is closed raises `SIGPIPE`, which ends
-//! `pgrep` and `pkill` unless their parent ignores the signal.
+//! `pgrep` and `pkill` unless their parent ignores the signal. `ps` catches the
+//! signal and exits with status 0.
 
 use std::{
     os::unix::process::ExitStatusExt,
@@ -212,6 +213,79 @@ fn an_ignored_sigpipe_stays_ignored(#[case] tool: &str) -> std::io::Result<()> {
             String::from_utf8_lossy(&output.stderr).into_owned()
         ),
         (Some(0), String::new())
+    );
+
+    Ok(())
+}
+
+// procps-ng's `ps` catches `SIGPIPE` and exits with status 0, even when its
+// parent ignores the signal.
+#[rstest]
+#[case::default_disposition("exec \"$0\" --help all")]
+#[case::ignored("trap '' PIPE; exec \"$0\" --help all")]
+fn ps_exits_with_status_0_on_a_closed_pipe(#[case] script: &str) -> std::io::Result<()> {
+    let _alone = alone();
+    let (reader, writer) = std::io::pipe()?;
+    drop(reader);
+
+    let output = Command::new("/bin/sh")
+        .args(["-c", script, env!("CARGO_BIN_EXE_ps")])
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .output()?;
+
+    assert_eq!(
+        (
+            output.status.code(),
+            output.status.signal(),
+            String::from_utf8_lossy(&output.stderr).into_owned()
+        ),
+        (Some(0), None, String::new())
+    );
+
+    Ok(())
+}
+
+// The kernel sends `SIGXFSZ` at once when a write passes the file size limit,
+// so the test needs no timing. procps-ng's `ps` reports the signal and a bug,
+// and then dies of it.
+#[test]
+fn ps_reports_a_signal_that_its_handler_catches() -> Result<(), Box<dyn std::error::Error>> {
+    let _alone = alone();
+    let tool = env!("CARGO_BIN_EXE_ps");
+    let directory = tempfile::tempdir()?;
+
+    // The child inherits this thread's signal mask. With `SIGXFSZ` blocked,
+    // the write would fail with `EFBIG` and raise no signal.
+    darwin_proc::unblock_signal(libc::SIGXFSZ)?;
+
+    let output = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "ulimit -f 1; exec \"$0\" --help all > \"$1\"",
+            tool,
+            directory
+                .path()
+                .join("help")
+                .to_str()
+                .ok_or("path is not UTF-8")?,
+        ])
+        .stderr(Stdio::piped())
+        .output()?;
+
+    assert_eq!(
+        (
+            output.status.code(),
+            output.status.signal(),
+            String::from_utf8(output.stderr)?
+        ),
+        (
+            None,
+            Some(libc::SIGXFSZ),
+            format!(
+                "Signal 25 (XFSZ) caught by ps (4.0.7).\n{tool}:src/ps/display.c:75: please report this bug\n"
+            )
+        )
     );
 
     Ok(())

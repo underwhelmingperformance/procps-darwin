@@ -310,6 +310,38 @@ unknown signals. procps-ng on Linux reads `pkill -emt` as `-e -m -t` and
 `pkill -info` as `-i -n -f -o`, so the tools also read `-emt` and `-info` as
 options.
 
+procps-ng's `ps` installs a handler for each signal from 1 to 31 except
+`SIGINT`, `SIGQUIT`, `SIGKILL`, `SIGSTOP`, `SIGCONT`, `SIGTSTP`, `SIGTTOU`,
+`SIGPROF`, `SIGWINCH`, `SIGURG` and `SIGCHLD`. `ps` installs the same handler
+for the signals that both systems have. Darwin's `SIGEMT` and `SIGINFO` keep
+their default actions, so `SIGINFO`, which the terminal sends for Control-T,
+does not end `ps`. The handler's message gives Darwin's number and procps-ng's
+name for the signal, such as `Signal 30 (USR1) caught by ps (4.0.7).`
+
+For each signal that it reports as a bug, the handler then restores the signal's
+default action and sends the signal again, and for most of these signals the
+default action ends `ps`. On Linux the default action of `SIGIO` ends a process
+too, so procps-ng's `ps` dies of it after the message and the bug report. Darwin
+discards `SIGIO` by default and has no other way to end a process with it, so
+`ps` prints the same two lines and exits with status 1. `SIGTTIN`, the only stop
+signal with the handler, stops `ps` on both systems until `SIGCONT`, and `ps`
+then exits with status 1. In an orphaned process group, both systems discard
+`SIGTTIN`, and `ps` exits with status 1 at once.
+
+procps-ng's handler writes the output that `ps` has buffered in two of its
+cases. On `SIGHUP`, `SIGUSR1` and `SIGUSR2`, it ends with `exit`, and
+`close_stdout` then writes the buffer and reports a failed write. For the
+signals that it reports as a bug, `error_at_line` writes the buffer after the
+first line of the message and before the bug report. On `SIGTERM` and `SIGPIPE`,
+it writes nothing more. `ps` writes no buffered output from its handler in any
+case, because the handler cannot reach the buffer soundly. The buffer belongs to
+`procps::output::Output`, which moves the buffered bytes out of it before it
+calls `write(2)`, so the bytes of an interrupted write are not in the buffer.
+The code that the signal interrupts can also be changing the buffer, and a
+handler must not read memory in that state. Reporting a failed write would also
+need `close_stdout`'s messages, which `ps` formats with functions that are not
+async-signal-safe.
+
 ## Error descriptions
 
 Some of procps-ng's messages end with the C library's description of an error

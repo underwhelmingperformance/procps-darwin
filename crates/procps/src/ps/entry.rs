@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     output::Output,
-    ps::{error::PsError, parser, run, system::Host},
+    ps::{error::PsError, parser, run, signals, system::Host},
 };
 
 /// Runs `ps` with the process's arguments, and returns its exit status.
@@ -32,6 +32,12 @@ pub fn entry() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().collect();
     let program = crate::program_name(&arguments, "ps");
     let argument_zero = arguments.first().cloned().unwrap_or_else(|| "ps".into());
+
+    // procps-ng ignores a failure to install its handlers, as `ps` does.
+    if let Err(error) = darwin_proc::catch_signals(signals::responses(&argument_zero, &program)) {
+        tracing::warn!(%error, "cannot install the signal handlers");
+    }
+
     let parsed = parser::parse(&arguments, &Host::new());
 
     let mut output = Output::new();

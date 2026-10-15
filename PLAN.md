@@ -1180,8 +1180,19 @@ reports `write error: Bad file descriptor`. `procps::output::Output::new` gives
 `ps` C's streams without the epoll behaviour of `pgrep`, which
 `Output::with_epoll_descriptor` keeps.
 
-procps-ng's `main` also installs handlers for most signals, which `ps` does not
-install yet.
+procps-ng's `main` also installs a handler for most signals, and `ps` installs
+the same one with `darwin_proc::catch_signals`. `SIGPIPE` makes `ps` exit with
+status 0, even when the parent ignores the signal, and `SIGHUP` makes it exit
+with status 1. `SIGUSR1` and `SIGUSR2` make it print the signal's number and
+name and exit with status 1. `SIGTERM` ends it silently. For each other signal
+that has the handler, `ps` prints the signal's number and name and asks for a
+bug report. It then restores the signal's default action and sends the signal to
+itself, and exits with status 1 if it continues after that. `SIGTTIN`, the only
+stop signal with the handler, stops it until `SIGCONT` unless its process group
+is orphaned, and on Darwin the default action of `SIGIO` discards the signal.
+`SIGINT`, `SIGQUIT`, `SIGKILL`, `SIGSTOP`, `SIGCONT`, `SIGTSTP`, `SIGTTOU`,
+`SIGPROF`, `SIGWINCH`, `SIGURG` and `SIGCHLD` have no handler.
+`docs/mappings.md` describes the differences on Darwin.
 
 The reference scenarios in `scenarios/ps/` check the usage text, `ps L`, and the
 errors and warnings of the parser. The scenarios for `ps -aux` without a
