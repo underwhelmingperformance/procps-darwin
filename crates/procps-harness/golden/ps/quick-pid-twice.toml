@@ -1,0 +1,5 @@
+status = 1
+stdout = ""
+stderr = """
+q/-q/--quick-pid can only be used once.
+"""

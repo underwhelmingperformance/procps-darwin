@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "ps L lists the format specifiers and their headers"
+command = ["ps", "L"]

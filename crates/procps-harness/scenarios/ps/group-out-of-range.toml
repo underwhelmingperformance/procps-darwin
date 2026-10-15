@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "the largest group ID is 4294967294"
+command = ["ps", "-G", "4294967295"]

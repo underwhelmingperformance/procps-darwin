@@ -1,0 +1,26 @@
+status = 0
+stdout = """
+
+Usage:
+ ps [options]
+
+Selection by list:
+ -C <command>         command name
+ -G, --Group <GID>    real group id or name
+ -g, --group <group>  session or effective group name
+ -p, p, --pid <PID>   process id
+        --ppid <PID>  parent process id
+ -q, q, --quick-pid <PID>
+                      process id (quick mode)
+ -s, --sid <session>  session id
+ -t, t, --tty <tty>   terminal
+ -u, U, --user <UID>  effective user id or name
+ -U, --User <UID>     real user id or name
+
+  The selection options take as their argument either:
+    a comma-separated list e.g. '-u root,nobody' or
+    a blank-separated list e.g. '-p 123 4567'
+
+For more details see ps(1).
+"""
+stderr = ""

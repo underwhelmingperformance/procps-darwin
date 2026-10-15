@@ -1,0 +1,15 @@
+status = 0
+stdout = """
+
+Usage:
+ ps [options]
+
+Show threads:
+  H                   as if they were processes
+ -L                   possibly with LWP and NLWP columns
+ -m, m                after processes
+ -T                   possibly with SPID column
+
+For more details see ps(1).
+"""
+stderr = ""

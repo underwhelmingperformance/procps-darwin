@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "ps -aux reads its options as BSD's aux without a warning"
+pending = true
+command = ["ps", "-aux", "--deselect", "--no-headers"]

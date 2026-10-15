@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--help takes the next argument as its section, even an option"
+command = ["ps", "--help", "-e"]

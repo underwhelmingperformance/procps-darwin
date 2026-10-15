@@ -1,0 +1,5 @@
+status = 1
+stdout = ""
+stderr = """
+ps:src/ps/sortformat.c:917: internal error: no PRI for -c option
+"""

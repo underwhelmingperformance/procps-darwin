@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "PS_FORMAT replaces the default columns"
+pending = true
+command = ["ps", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+
+[environment]
+PS_FORMAT = "pid,comm"

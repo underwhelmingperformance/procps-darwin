@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--cols accepts fewer than 2000000000 columns"
+command = ["ps", "--cols", "2000000000"]

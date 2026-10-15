@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "after a pid, ps reads every argument as a pid"
+command = ["ps", "{session}", "-e"]

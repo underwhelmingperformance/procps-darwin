@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a BSD option makes the second parse fail, so ps reports -x's error from the first"
+command = ["ps", "a", "-x"]

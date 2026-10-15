@@ -1,0 +1,5 @@
+status = 1
+stdout = ""
+stderr = """
+q/-q/--quick-pid cannot be combined with other selection options.
+"""

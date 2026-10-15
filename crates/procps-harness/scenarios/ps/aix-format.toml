@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "an AIX format gives a column for each descriptor and for the text between them"
+pending = true
+command = ["ps", "-o", "%p %c", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"

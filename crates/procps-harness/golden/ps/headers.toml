@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+Process Name
+  {a1} harness-alpha
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

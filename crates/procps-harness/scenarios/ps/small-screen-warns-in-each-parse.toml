@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "ps warns about a narrow screen in each parse of the command line"
+command = ["ps", "-x", "--help", "s"]
+
+[environment]
+COLUMNS = "5"
