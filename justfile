@@ -10,6 +10,7 @@ build:
 
 clippy:
     cargo clippy --locked --workspace --all-targets -- --deny warnings
+    cargo clippy --locked -p procps-harness --all-targets --target aarch64-unknown-linux-gnu -- --deny warnings
 
 test:
     cargo test --locked --workspace
