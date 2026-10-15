@@ -634,8 +634,9 @@ needs a ptrace read-access check. Linux has no per-process energy count. The
 rest of `ResourceUsage` goes to every user. The runnable time, which includes
 the running time, corresponds to `sum_exec_runtime` plus `run_delay` in
 `/proc/<pid>/schedstat`, and the wired size, footprint and page-ins to the sizes
-and faults in `status` and `stat`. The wakeups have no Linux counterpart, and
-reveal no more than the CPU time.
+and faults in `status` and `stat`. The CPU times of the children that the
+process has reaped correspond to `cutime` and `cstime` in `stat`. The wakeups
+have no Linux counterpart, and reveal no more than the CPU time.
 
 The memory regions go only to the owner and root, as `maps` and `smaps_rollup`
 do on Linux. `RegionTotals` goes to every user, as the text and data sizes in

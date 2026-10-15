@@ -86,6 +86,25 @@ fn the_task_its_usage_and_its_thread_agree_on_cpu_time() -> Result<(), Box<dyn s
     Ok(())
 }
 
+// The kernel adds a child's CPU time to its parent's when the parent reaps
+// the child. Other tests reap children too, so the parent's total is at least
+// this child's time.
+#[test]
+fn a_reaped_child_s_cpu_time_counts_for_its_parent() -> Result<(), Box<dyn std::error::Error>> {
+    let child = BusyChild::start()?;
+    let task = child.pid()?.task_info()?;
+    drop(child);
+
+    let (usage, _) = Pid::current().resource_usage()?;
+
+    assert!(
+        usage.children_user_time + usage.children_system_time >= task.user_time + task.system_time,
+        "{usage:?} {task:?}"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn a_named_thread_is_listed_by_name() -> Result<(), Box<dyn std::error::Error>> {
     let (sender, receiver) = mpsc::channel::<()>();
