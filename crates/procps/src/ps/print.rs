@@ -15,9 +15,10 @@ use std::{
     os::unix::ffi::OsStrExt,
 };
 
-use darwin_proc::{CalendarTime, Status, TaskInfo};
+use darwin_proc::{CalendarTime, ResourceCounters, Status, TaskInfo};
 use procps_core::{
-    Charset, FieldGroup, LinuxPolicy, LinuxPriority, LinuxTask, Process, Snapshot, helper::Caller,
+    Charset, Field, FieldGroup, LinuxPolicy, LinuxPriority, LinuxTask, Process, Snapshot,
+    helper::Caller,
 };
 
 use crate::{
@@ -302,6 +303,11 @@ impl<'a> Context<'a> {
         self.clock
     }
 
+    /// The size of a memory page.
+    pub(crate) const fn page_size(&self) -> u64 {
+        self.page_size
+    }
+
     /// The locale's character encoding.
     pub(crate) const fn charset(&self) -> Charset {
         self.charset
@@ -401,6 +407,42 @@ pub(crate) fn utilization(context: &Context<'_>, process: &Process) -> Option<f6
     } else {
         Some(0.0)
     }
+}
+
+/// The percentage of the time since `process` started that it and its
+/// reaped children have used the CPU (`UTILIZATION_C`), or 0 if it started
+/// at the snapshot.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "procps-ng converts the ticks to a float"
+)]
+pub(crate) fn utilization_with_children(context: &Context<'_>, process: &Process) -> Option<f64> {
+    let ticks = cpu_ticks(process)? + children_ticks(process)?;
+    let running = running_ticks(context, process);
+
+    if running > 0.0 {
+        Some(f64::from(ticks as f32 * 100.0) / running)
+    } else {
+        Some(0.0)
+    }
+}
+
+/// The CPU time of the children of `process` that have exited and been
+/// reaped, in clock ticks, which corresponds to Linux's `cutime` plus
+/// `cstime`. Darwin also counts the children that were reaped automatically,
+/// because `process` ignores `SIGCHLD`.
+fn children_ticks(process: &Process) -> Option<u64> {
+    let resources = process.usage.as_ref()?.resources.available()?;
+
+    Some(Clock::ticks(resources.children_user_time) + Clock::ticks(resources.children_system_time))
+}
+
+/// The user CPU time of `process` and of its reaped children, in clock ticks
+/// (`TICS_USER_C`).
+pub(crate) fn user_ticks_with_children(process: &Process) -> Option<u64> {
+    let resources = process.usage.as_ref()?.resources.available()?;
+
+    Some(user_ticks(process)? + Clock::ticks(resources.children_user_time))
 }
 
 /// The virtual and resident sizes of `process` in bytes. A zombie has no
@@ -549,30 +591,14 @@ const fn whole(seconds: f64) -> u64 {
 }
 
 impl Printer {
-    /// Whether this project prints the value yet. Task 5.4 implements the
-    /// rest.
-    pub(crate) const fn is_implemented(self) -> bool {
-        !matches!(
-            self,
-            Self::Environ
-                | Self::Exe
-                | Self::Fds
-                | Self::Lim
-                | Self::Rbytes
-                | Self::Supgid
-                | Self::Supgrp
-                | Self::Uss
-                | Self::UtilizationC
-                | Self::Wbytes
-        )
-    }
-
     /// The field groups that the value comes from, with `modifiers`.
     pub(crate) fn groups(self, modifiers: Modifiers) -> &'static [FieldGroup] {
-        use FieldGroup::{Arguments, Regions, Threads, Usage};
+        use FieldGroup::{Arguments, Environment, FileDescriptors, Regions, Threads, Usage};
 
         match self {
             Self::Args if !modifiers.contains(Modifiers::COMMAND_NAMES) => &[Arguments],
+            Self::Environ => &[Environment],
+            Self::Fds => &[FileDescriptors],
             Self::Comm if modifiers.contains(Modifiers::FULL) => &[Arguments],
             Self::Stat | Self::S | Self::SgiP => &[Threads],
             Self::Bsdtime
@@ -592,6 +618,7 @@ impl Printer {
             | Self::PriBaz
             | Self::PriFoo
             | Self::Priority
+            | Self::Rbytes
             | Self::Rss
             | Self::Rtprio
             | Self::Sched
@@ -600,8 +627,10 @@ impl Printer {
             | Self::Time
             | Self::Times
             | Self::Utilization
-            | Self::Vsz => &[Usage],
-            Self::Drs | Self::Dsiz | Self::Trs | Self::Tsiz => &[Usage, Regions],
+            | Self::UtilizationC
+            | Self::Vsz
+            | Self::Wbytes => &[Usage],
+            Self::Drs | Self::Dsiz | Self::Trs | Self::Tsiz | Self::Uss => &[Usage, Regions],
             Self::Swapable => &[Regions],
             _ => &[],
         }
@@ -660,10 +689,10 @@ impl Printer {
                 Cell::text(format!("{days_text}{hours_text}{minutes:02}:{seconds:02}"))
             }
             Self::Etimes => Cell::text(whole(elapsed(context, process)).to_string()),
-            Self::C => utilization_cell(context, process, |utilization| {
+            Self::C => utilization_cell(utilization(context, process), |utilization| {
                 format!("{:2}", whole(utilization).min(99))
             }),
-            Self::Pcpu => utilization_cell(context, process, |utilization| {
+            Self::Pcpu => utilization_cell(utilization(context, process), |utilization| {
                 let tenths = whole(utilization * 10.0);
 
                 if tenths > 999 {
@@ -672,18 +701,16 @@ impl Printer {
                     format!("{}.{}", tenths / 10, tenths % 10)
                 }
             }),
-            Self::Cp => utilization_cell(context, process, |utilization| {
+            Self::Cp => utilization_cell(utilization(context, process), |utilization| {
                 format!("{:3}", whole(utilization * 10.0).min(999))
             }),
-            Self::Utilization => utilization_cell(context, process, |utilization| {
-                let utilization = if utilization > 99.0 {
-                    99.999
-                } else {
-                    utilization
-                };
-
-                format!("{utilization:.3}")
-            }),
+            Self::Utilization => {
+                utilization_cell(utilization(context, process), lifetime_percentage)
+            }
+            Self::UtilizationC => utilization_cell(
+                utilization_with_children(context, process),
+                lifetime_percentage,
+            ),
             Self::Pgid => Cell::text(info.pgid.as_raw().cast_unsigned().to_string()),
             Self::Ppid => Cell::text(info.ppid.as_raw().cast_unsigned().to_string()),
             Self::Time => cpu_cell(process, |seconds| {
@@ -724,6 +751,32 @@ impl Printer {
             }
             Self::Trs | Self::Tsiz => region_cell(context, process, true),
             Self::Drs | Self::Dsiz => region_cell(context, process, false),
+            Self::Uss => number_cell(unique_size(process)),
+            Self::Rbytes => number_cell(counters(process).map(|counters| counters.disk_bytes_read)),
+            Self::Wbytes => {
+                number_cell(counters(process).map(|counters| counters.disk_bytes_written))
+            }
+            Self::Fds => number_cell(open_files(process)),
+            Self::Exe => {
+                let executable = executable(context, process);
+
+                unlimited_cell(context, &executable, room)
+            }
+            Self::Environ => {
+                let environment = process.linux_environment_line(context.charset);
+
+                unlimited_cell(context, environment.as_bytes(), room)
+            }
+            Self::Supgid => {
+                let groups = supplementary_gids(process);
+
+                Cell::text(&groups[..groups.len().min(room.cells)])
+            }
+            Self::Supgrp => {
+                let groups = supplementary_groups(context, process);
+
+                unlimited_cell(context, &groups, room)
+            }
             Self::Swapable if has_no_memory(process) => Cell::text(*b"0"),
             Self::Swapable => process
                 .linux_sizes()
@@ -874,10 +927,10 @@ impl Printer {
             // containers, security labels, capabilities, autogroups, the OOM
             // killer, NUMA nodes, huge pages, the processor, the wait
             // channel, the login user ID, and I/O counts that Darwin does not
-            // keep. macOS has pending and blocked signals and each thread's
-            // registers and stack, but `kinfo_proc` reports no pending or
-            // blocked signals, and `ps` does not read the registers yet (task
-            // 5.4).
+            // keep. macOS has pending and blocked signals, resource limits, and
+            // each thread's registers and stack, but `kinfo_proc` reports no
+            // pending or blocked signals, no call reads another process's
+            // limits, and `ps` does not read the registers.
             Self::Agid
             | Self::Agnice
             | Self::Cgname
@@ -890,6 +943,7 @@ impl Printer {
             | Self::Hugetblprv
             | Self::Hugetblshr
             | Self::Ipcns
+            | Self::Lim
             | Self::Luid
             | Self::Lxcname
             | Self::Mntns
@@ -923,16 +977,6 @@ impl Printer {
             | Self::Wchan
             | Self::Wchars
             | Self::Wops => Cell::dash(),
-            Self::Environ
-            | Self::Exe
-            | Self::Fds
-            | Self::Lim
-            | Self::Rbytes
-            | Self::Supgid
-            | Self::Supgrp
-            | Self::Uss
-            | Self::UtilizationC
-            | Self::Wbytes => unreachable!("ps refuses specifiers that it does not implement"),
         }
     }
 }
@@ -972,14 +1016,117 @@ fn command_or_command_line(
     }
 }
 
-/// The utilization of `process`, formatted by `format`, or `-`.
-fn utilization_cell(
-    context: &Context<'_>,
-    process: &Process,
-    format: impl FnOnce(f64) -> String,
-) -> Cell {
-    utilization(context, process)
-        .map_or_else(Cell::dash, |utilization| Cell::text(format(utilization)))
+/// `utilization`, formatted by `format`, or `-`.
+fn utilization_cell(utilization: Option<f64>, format: impl FnOnce(f64) -> String) -> Cell {
+    utilization.map_or_else(Cell::dash, |utilization| Cell::text(format(utilization)))
+}
+
+/// A percentage of a process's lifetime, as procps-ng's `pr_utilization`
+/// and `pr_utilization_c` print it: with three decimals, and at most
+/// 99.999.
+fn lifetime_percentage(utilization: f64) -> String {
+    let utilization = if utilization > 99.0 {
+        99.999
+    } else {
+        utilization
+    };
+
+    format!("{utilization:.3}")
+}
+
+/// `text`, escaped and cut to the room of a column without a width limit,
+/// as procps-ng's `escape_str` copies a string into the output buffer.
+fn unlimited_cell(context: &Context<'_>, text: &[u8], room: Room) -> Cell {
+    let escaped = escape::escape(text, context.utf8(), room.cells, OUTBUF_SIZE);
+
+    Cell {
+        bytes: escaped.bytes,
+        amount: i64::try_from(escaped.cells).unwrap_or(i64::MAX),
+    }
+}
+
+/// `number` in decimal, or `-` if the source could not read it.
+fn number_cell(number: Option<impl ToString>) -> Cell {
+    number.map_or_else(Cell::dash, |number| Cell::text(number.to_string()))
+}
+
+/// The disk I/O, instruction, cycle and energy counters of `process`, if the
+/// source read them.
+pub(crate) fn counters(process: &Process) -> Option<&ResourceCounters> {
+    process.usage.as_ref()?.counters.available()
+}
+
+/// The resident memory that only `process` uses, in KiB (`SMAP_PRV_TOTAL`).
+/// A zombie has no memory.
+pub(crate) fn unique_size(process: &Process) -> Option<u64> {
+    if has_no_memory(process) {
+        return Some(0);
+    }
+
+    process
+        .linux_sizes()
+        .unique
+        .and_then(|size| size.available().copied())
+        .map(|size| size >> 10)
+}
+
+/// The number of open file descriptors of `process` (`OPEN_FILES`). A zombie
+/// has closed its descriptors, and Darwin does not list them.
+pub(crate) fn open_files(process: &Process) -> Option<usize> {
+    match process.file_descriptor_count {
+        Some(Field::Available(count)) => Some(count),
+        Some(Field::Unsupported) if process.info.status == Status::Zombie => Some(0),
+        _ => None,
+    }
+}
+
+/// The path of the executable of `process` (`EXE`), or `-` if `ps` may not
+/// read the process's private values, as Linux guards `/proc/<pid>/exe`.
+pub(crate) fn executable(context: &Context<'_>, process: &Process) -> Vec<u8> {
+    if !context.caller.may_read_private(&process.info) {
+        return b"-".to_vec();
+    }
+
+    process
+        .linux_executable(context.charset)
+        .into_encoded_bytes()
+}
+
+/// The group IDs of `process` separated by commas, as procps-ng's `SUPGIDS`
+/// item writes Linux's `Groups` list, or `-` if the list is empty.
+pub(crate) fn supplementary_gids(process: &Process) -> Vec<u8> {
+    join_groups(process, |gid| gid.to_string().into_bytes())
+}
+
+/// The names of the groups of `process` separated by commas, as procps-ng's
+/// `SUPGROUPS` item writes them, or `-` if the list is empty. A group without
+/// a name has its ID.
+pub(crate) fn supplementary_groups(context: &mut Context<'_>, process: &Process) -> Vec<u8> {
+    join_groups(process, |gid| context.names.group(gid).to_vec())
+}
+
+/// The groups of `process` in ascending order of ID, each written by `write`
+/// and separated by commas, or `-` if the list is empty. Linux sorts the list
+/// when a process sets it, and Darwin keeps the order in which it was set.
+fn join_groups(process: &Process, mut write: impl FnMut(u32) -> Vec<u8>) -> Vec<u8> {
+    let mut groups: Vec<u32> = process
+        .info
+        .credentials
+        .groups
+        .iter()
+        .map(|gid| gid.as_raw())
+        .collect();
+
+    if groups.is_empty() {
+        return b"-".to_vec();
+    }
+
+    groups.sort_unstable();
+    groups
+        .into_iter()
+        .map(&mut write)
+        .collect::<Vec<_>>()
+        .join(&b","[..])
 }
 
 /// The CPU time of `process` in seconds, formatted by `format`, or `-`.
@@ -1144,12 +1291,14 @@ fn test_cell(values: &[&str], room: Room, cut: bool) -> Cell {
 pub(crate) mod tests {
     use std::{
         ffi::OsString,
+        path::PathBuf,
         time::{Duration, SystemTime},
     };
 
     use darwin_proc::{
-        AccountingFlags, CalendarTime, Gid, LoadAverage, Memory, Pid, ResourceUsage, RunState,
-        SchedulingPolicy, SignalSet, Status, Swap, TaskInfo, TaskTotals, Terminal, Uid,
+        AccountingFlags, CalendarTime, Gid, LoadAverage, Memory, Pid, Protection, Region,
+        ResourceCounters, ResourceUsage, RunState, SchedulingPolicy, ShareMode, SignalSet, Status,
+        Swap, TaskInfo, TaskTotals, Terminal, Uid,
     };
     use pretty_assertions::assert_eq;
     use procps_core::{
@@ -1672,6 +1821,235 @@ pub(crate) mod tests {
         });
 
         assert_eq!(printed, expected);
+    }
+
+    /// [`owned_by`] the user 501 and the group 20, with the values that the
+    /// columns of Linux's private files come from.
+    fn with_private_values() -> Process {
+        let mut process = owned_by(501, 20);
+
+        process.executable = Field::Available(PathBuf::from("/bin/sleep"));
+        process.environment = Some(Field::Available(vec![
+            OsString::from("HOME=/"),
+            OsString::from("TERM=vt100"),
+        ]));
+        process.info.credentials.groups = [20, 0, 30].map(Gid::from).to_vec();
+        process = process.with_file_descriptors(Field::Available(vec![0, 1, 2, 5]));
+        process.usage = Some(Usage {
+            task: Field::Available(task()),
+            resources: Field::Available(ResourceUsage {
+                children_user_time: Duration::from_secs(4),
+                children_system_time: Duration::from_secs(2),
+                ..resources()
+            }),
+            counters: Field::Available(ResourceCounters {
+                disk_bytes_read: 4_096,
+                disk_bytes_written: 8_192,
+                logical_writes: 0,
+                instructions: 0,
+                cycles: 0,
+                energy_nanojoules: 0,
+            }),
+        });
+        process.regions = Some(Field::Available(vec![
+            region(48 << 10, 0),
+            region(16 << 10, 1),
+        ]));
+
+        process
+    }
+
+    /// A region with `private_resident` bytes that only its process uses,
+    /// and `shared_resident` bytes that other processes may use too.
+    fn region(private_resident: u64, shared_resident: u64) -> Region {
+        Region {
+            address: 0,
+            size: 1 << 20,
+            protection: Protection::from(0x3),
+            max_protection: Protection::from(0x7),
+            share_mode: ShareMode::Private,
+            user_tag: 0,
+            resident: private_resident + shared_resident,
+            private_resident,
+            shared_resident,
+            shared_now_private: 0,
+            swapped_out: 0,
+            dirtied: 0,
+            reference_count: 1,
+            object_id: None,
+            is_submap: false,
+            is_shared: false,
+        }
+    }
+
+    #[rstest]
+    #[case::exe("exe", "/bin/sleep")]
+    #[case::environ("environ", "HOME=/ TERM=vt100")]
+    #[case::supgid("supgid", "0,20,30")]
+    #[case::supgrp("supgrp", "wheel,staff,30")]
+    #[case::fds("fds", "4")]
+    #[case::lim("lim", "-")]
+    #[case::rbytes("rbytes", "4096")]
+    #[case::wbytes("wbytes", "8192")]
+    #[case::uss("uss", "64")]
+    #[case::cuc("cuc", "8.000")]
+    fn a_private_value_is_shown_to_the_owner(#[case] name: &str, #[case] expected: &str) {
+        let settings = Settings {
+            caller: Caller::new(Uid::from(501), Gid::from(20)),
+            ..settings(Modifiers::empty())
+        };
+        let cell = printed(name, with_private_values(), 1_000, settings);
+
+        assert_eq!(
+            String::from_utf8(cell.bytes).expect("the text is UTF-8"),
+            expected
+        );
+    }
+
+    // The helper withholds the environment, the descriptors, the regions and
+    // the counters from other users, and macOS withholds them without the
+    // helper. The executable's path reaches every user, so `ps` applies the
+    // access check to it itself, as Linux guards `/proc/<pid>/exe`. The
+    // helper sends the number of descriptors to every user.
+    #[test]
+    fn a_private_value_is_a_dash_for_another_user() {
+        let mut process = with_private_values();
+        process.environment = Some(Field::Denied);
+        process.file_descriptors = Some(Field::Denied);
+        process.regions = Some(Field::Denied);
+        process.usage = Some(Usage {
+            counters: Field::Denied,
+            ..process.usage.expect("the usage")
+        });
+        let settings = Settings {
+            caller: Caller::new(Uid::from(502), Gid::from(20)),
+            ..settings(Modifiers::empty())
+        };
+        let printed: Vec<String> = ["exe", "environ", "fds", "rbytes", "wbytes", "uss"]
+            .iter()
+            .map(|name| {
+                let cell = printed(name, process.clone(), 1_000, settings.clone());
+
+                String::from_utf8(cell.bytes).expect("the text is UTF-8")
+            })
+            .collect();
+
+        assert_eq!(printed, ["-", "-", "4", "-", "-", "-"]);
+    }
+
+    #[rstest]
+    #[case::cut(3, "0,2")]
+    #[case::fits(7, "0,20,30")]
+    fn supgid_is_cut_to_its_room(#[case] cells: usize, #[case] expected: &str) {
+        assert_eq!(
+            printed(
+                "supgid",
+                with_private_values(),
+                cells,
+                settings(Modifiers::empty())
+            ),
+            Cell::text(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::escaped(1_000, "staff,a?b", 9)]
+    #[case::cut(8, "staff,a?", 8)]
+    fn supgrp_is_escaped_and_cut_to_its_room(
+        #[case] cells: usize,
+        #[case] expected: &str,
+        #[case] amount: i64,
+    ) {
+        let mut process = with_private_values();
+        process.info.credentials.groups = [40, 20].map(Gid::from).to_vec();
+        let mut system = system();
+        system.groups.insert("a\tb", 40);
+        let snapshot = snapshot(vec![process]);
+        let mut context = Context::new(
+            &snapshot,
+            &snapshot,
+            settings(Modifiers::empty()),
+            Names::new(&system),
+        );
+        let room = Room {
+            cells,
+            wide_signals: true,
+            lines_to_next_header: -2,
+        };
+        let specifier = specifier::find(b"supgrp").expect("a specifier");
+
+        assert_eq!(
+            specifier
+                .printer
+                .print(&mut context, &snapshot.processes[0].linux_task(), room),
+            Cell {
+                bytes: expected.as_bytes().to_vec(),
+                amount
+            }
+        );
+    }
+
+    // procps-ng leaves the percentage at 0 when the process started at the
+    // snapshot, as it does for `pcpu`.
+    #[test]
+    fn cuc_of_a_process_that_started_at_the_snapshot_is_0() {
+        let mut process = with_private_values();
+        process.info.start_time = SystemTime::UNIX_EPOCH + Duration::from_secs(TAKEN);
+
+        assert_eq!(text("cuc", process), "0.000");
+    }
+
+    #[rstest]
+    #[case::fits(18, "HOME=/ TERM=vt100", 17)]
+    #[case::cut(6, "HOME=/", 6)]
+    fn the_environment_is_cut_to_its_room(
+        #[case] cells: usize,
+        #[case] expected: &str,
+        #[case] amount: i64,
+    ) {
+        assert_eq!(
+            printed(
+                "environ",
+                with_private_values(),
+                cells,
+                settings(Modifiers::empty())
+            ),
+            Cell {
+                bytes: expected.as_bytes().to_vec(),
+                amount
+            }
+        );
+    }
+
+    #[test]
+    fn a_process_without_groups_has_a_dash() {
+        let mut process = with_private_values();
+        process.info.credentials.groups = Vec::new();
+
+        assert_eq!(
+            (text("supgid", process.clone()), text("supgrp", process)),
+            ("-".to_owned(), "-".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_zombie_has_no_open_files_or_memory() {
+        let mut process = with_private_values();
+        process.info.status = Status::Zombie;
+        process.executable = Field::Unsupported;
+        process = process.with_file_descriptors(Field::Unsupported);
+        process.regions = Some(Field::Unsupported);
+        process.usage = Some(Usage {
+            task: Field::Unsupported,
+            ..process.usage.expect("the usage")
+        });
+
+        let printed: Vec<String> = ["exe", "fds", "uss", "rbytes"]
+            .iter()
+            .map(|name| text(name, process.clone()))
+            .collect();
+
+        assert_eq!(printed, ["-", "0", "0", "4096"]);
     }
 
     #[test]

@@ -67,23 +67,7 @@ fn unimplemented(options: &Options) -> Option<Unimplemented> {
         return Some(Unimplemented::Option(option));
     }
 
-    let column = options
-        .columns
-        .iter()
-        .find_map(|column| match column.content {
-            Content::Specifier(specifier) if !specifier.printer.is_implemented() => Some(specifier),
-            _ => None,
-        });
-
-    if let Some(specifier) = column {
-        return Some(Unimplemented::Specifier(specifier.name));
-    }
-
-    options
-        .sort
-        .iter()
-        .find(|key| key.order != Order::Ignored && !key.specifier.sort.is_implemented())
-        .map(|key| Unimplemented::SortKey(key.specifier.name))
+    None
 }
 
 /// The request for the data that `options` show: the field groups that the
@@ -673,8 +657,6 @@ mod tests {
     #[case::environment(&["e"], Unimplemented::Option("e"))]
     #[case::cumulative(&["S"], Unimplemented::Option("S"))]
     #[case::signal_names(&["--signames"], Unimplemented::Option("--signames"))]
-    #[case::specifier(&["-o", "pid,fds"], Unimplemented::Specifier("fds"))]
-    #[case::sort_key(&["--sort", "vm_data"], Unimplemented::SortKey("vm_data"))]
     fn a_part_that_is_not_implemented_yet_is_an_error(
         #[case] line: &[&str],
         #[case] expected: Unimplemented,
@@ -684,6 +666,11 @@ mod tests {
             (stdout, _, Err(PsError::Unimplemented(unimplemented)))
                 if stdout.is_empty() && unimplemented == expected
         );
+    }
+
+    /// The request for the identity and the usage group.
+    fn usage() -> SnapshotRequest {
+        SnapshotRequest::default().with(FieldGroup::Usage)
     }
 
     #[rstest]
@@ -701,6 +688,37 @@ mod tests {
     )]
     #[case::sort_key(&["-o", "pid", "--sort", "cmd"], SnapshotRequest::default().with(FieldGroup::Arguments))]
     #[case::running(&["r", "-o", "pid"], SnapshotRequest::default().with(FieldGroup::Threads))]
+    #[case::environment(&["-o", "environ"], SnapshotRequest::default().with(FieldGroup::Environment))]
+    #[case::descriptors(
+        &["-o", "fds"],
+        SnapshotRequest::default().with(FieldGroup::FileDescriptors)
+    )]
+    #[case::unique(
+        &["-o", "uss"],
+        SnapshotRequest::default().with(FieldGroup::Usage).with(FieldGroup::Regions)
+    )]
+    #[case::identity_values(&["-o", "exe,supgid,supgrp,lim"], SnapshotRequest::default())]
+    #[case::read_bytes(&["-o", "rbytes"], SnapshotRequest::default().with(FieldGroup::Usage))]
+    #[case::written_bytes(&["-o", "wbytes"], SnapshotRequest::default().with(FieldGroup::Usage))]
+    #[case::cpu_use_with_children(&["-o", "cuc"], SnapshotRequest::default().with(FieldGroup::Usage))]
+    #[case::sort_by_descriptors(
+        &["-o", "pid", "--sort", "fds"],
+        SnapshotRequest::default().with(FieldGroup::FileDescriptors)
+    )]
+    #[case::sort_by_unique(
+        &["-o", "pid", "--sort", "uss"],
+        SnapshotRequest::default().with(FieldGroup::Usage).with(FieldGroup::Regions)
+    )]
+    #[case::sort_by_code(
+        &["-o", "pid", "--sort", "vm_exe"],
+        SnapshotRequest::default().with(FieldGroup::Usage).with(FieldGroup::Regions)
+    )]
+    #[case::sort_by_read_bytes(&["-o", "pid", "--sort", "rbytes"], usage())]
+    #[case::sort_by_written_bytes(&["-o", "pid", "--sort", "wbytes"], usage())]
+    #[case::sort_by_children_user_time(&["-o", "pid", "--sort", "cutime"], usage())]
+    #[case::sort_by_cpu_use_with_children(&["-o", "pid", "--sort", "cuc"], usage())]
+    #[case::sort_by_resident_pages(&["-o", "pid", "--sort", "resident"], usage())]
+    #[case::sort_by_wired(&["-o", "pid", "--sort", "vm_lock"], usage())]
     fn the_request_asks_only_for_what_the_options_need(
         #[case] line: &[&str],
         #[case] expected: SnapshotRequest,

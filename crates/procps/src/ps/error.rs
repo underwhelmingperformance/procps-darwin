@@ -365,12 +365,6 @@ pub(crate) enum Unimplemented {
     /// An option that changes how columns show their values (task 5.6).
     #[error("the option {0} is not implemented yet")]
     Option(&'static str),
-    /// A format specifier (task 5.4).
-    #[error("the format specifier {0} is not implemented yet")]
-    Specifier(&'static str),
-    /// A sort key (task 5.4).
-    #[error("sorting by {0} is not implemented yet")]
-    SortKey(&'static str),
 }
 
 /// The exit status of every error, as in procps-ng.
@@ -569,8 +563,8 @@ mod tests {
     #[case::earlier_write(PsError::Write(WriteFailure::Stdout(None)), &b"ps: write error\n"[..])]
     #[case::stderr(PsError::Write(WriteFailure::Stderr), &b""[..])]
     #[case::unimplemented(
-        PsError::Unimplemented(Unimplemented::Specifier("fds")),
-        &b"ps: the format specifier fds is not implemented yet\n"[..]
+        PsError::Unimplemented(Unimplemented::Option("S")),
+        &b"ps: the option S is not implemented yet\n"[..]
     )]
     #[case::source(
         PsError::Source { quick: false, sorted: false, error: SourceError::TimedOut },

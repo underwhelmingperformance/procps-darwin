@@ -175,40 +175,20 @@ impl Value {
 }
 
 impl Item {
-    /// Whether this project computes the value yet. Task 5.4 implements the
-    /// rest.
-    pub(crate) const fn is_implemented(self) -> bool {
-        !matches!(
-            self,
-            Self::Exe
-                | Self::IoReadBytes
-                | Self::IoWriteBytes
-                | Self::MemResPgs
-                | Self::MemShrPgs
-                | Self::OpenFiles
-                | Self::RssRlim
-                | Self::SmapPrvTotal
-                | Self::Supgids
-                | Self::Supgroups
-                | Self::TicsUserC
-                | Self::UtilizationC
-                | Self::VmData
-                | Self::VmExe
-                | Self::VmLib
-                | Self::VmRssLocked
-                | Self::VmStack
-        )
-    }
-
     /// The field groups that the value comes from.
     pub(crate) const fn groups(self) -> &'static [FieldGroup] {
-        use FieldGroup::{Arguments, Threads, Usage};
+        use FieldGroup::{FileDescriptors, Regions, Threads, Usage};
 
         match self {
-            Self::Cmdline => &[Arguments],
+            Self::Cmdline => &[FieldGroup::Arguments],
             Self::State => &[Threads],
+            Self::OpenFiles => &[FileDescriptors],
+            Self::SmapPrvTotal | Self::VmExe => &[Usage, Regions],
             Self::FltMaj
             | Self::FltMin
+            | Self::IoReadBytes
+            | Self::IoWriteBytes
+            | Self::MemResPgs
             | Self::Nlwp
             | Self::Priority
             | Self::PriorityRt
@@ -216,9 +196,12 @@ impl Item {
             | Self::SchedClassstr
             | Self::TicsAll
             | Self::TicsUser
+            | Self::TicsUserC
             | Self::TimeAll
             | Self::Utilization
+            | Self::UtilizationC
             | Self::VmRss
+            | Self::VmRssLocked
             | Self::VmSize
             | Self::VsizeBytes => &[Usage],
             _ => &[],
@@ -238,6 +221,43 @@ impl Item {
 
         match self {
             Self::Cmd => Value::Text(task.command(context.charset()).as_bytes().to_vec()),
+            Self::Exe => Value::Text(print::executable(context, process)),
+            Self::IoReadBytes => {
+                unsigned(print::counters(process).map(|counters| counters.disk_bytes_read))
+            }
+            Self::IoWriteBytes => {
+                unsigned(print::counters(process).map(|counters| counters.disk_bytes_written))
+            }
+            Self::MemResPgs => {
+                let page_size = context.page_size().max(1);
+
+                unsigned(print::sizes(process).map(|(_, resident)| resident / page_size))
+            }
+            Self::OpenFiles => print::open_files(process)
+                .and_then(|count| i64::try_from(count).ok())
+                .map_or(Value::Missing, Value::Signed),
+            Self::SmapPrvTotal => unsigned(print::unique_size(process)),
+            Self::Supgids => Value::Text(print::supplementary_gids(process)),
+            Self::Supgroups => Value::Text(print::supplementary_groups(context, process)),
+            Self::TicsUserC => unsigned(print::user_ticks_with_children(process)),
+            Self::UtilizationC => print::utilization_with_children(context, process)
+                .map_or(Value::Missing, Value::Real),
+            // Linux shows `VmExe` in `status` to every user, so this key does
+            // not apply the access check that hides the code size in `trs`.
+            Self::VmExe => unsigned(
+                process
+                    .linux_sizes()
+                    .text
+                    .and_then(|size| size.available().copied())
+                    .map(|size| size >> 10),
+            ),
+            Self::VmRssLocked => unsigned(
+                process
+                    .usage
+                    .as_ref()
+                    .and_then(|usage| usage.resources.available())
+                    .map(|resources| resources.wired_size >> 10),
+            ),
             Self::Cmdline => Value::Text(task.command_line(context.charset()).as_bytes().to_vec()),
             Self::Flags => Value::Unsigned(process.linux_flags()),
             Self::FltMaj => unsigned(print::major_faults(process)),
@@ -306,7 +326,10 @@ impl Item {
             Self::VmSize => unsigned(print::sizes(process).map(|(size, _)| size / 1024)),
             Self::VsizeBytes => unsigned(print::sizes(process).map(|(size, _)| size)),
             // Linux concepts that macOS lacks, and values that procps-ng
-            // cannot print either.
+            // cannot print either. macOS has a limit on the resident size,
+            // but no call reads it for another process. `ps` does not
+            // approximate the shared, data, stack and library sizes, which
+            // only procps-ng's placeholders sort by.
             Self::AddrCodeEnd
             | Self::AddrCodeStart
             | Self::AddrCurrEip
@@ -350,24 +373,12 @@ impl Item {
             | Self::SmapHugeTlbprv
             | Self::SmapPss
             | Self::WchanName
-            | Self::Noop => Value::Same,
-            Self::Exe
-            | Self::IoReadBytes
-            | Self::IoWriteBytes
-            | Self::MemResPgs
             | Self::MemShrPgs
-            | Self::OpenFiles
             | Self::RssRlim
-            | Self::SmapPrvTotal
-            | Self::Supgids
-            | Self::Supgroups
-            | Self::TicsUserC
-            | Self::UtilizationC
             | Self::VmData
-            | Self::VmExe
             | Self::VmLib
-            | Self::VmRssLocked
-            | Self::VmStack => unreachable!("ps refuses sort keys that it does not implement"),
+            | Self::VmStack
+            | Self::Noop => Value::Same,
         }
     }
 }
@@ -403,13 +414,18 @@ mod tests {
     use std::{
         cmp::Ordering,
         ffi::OsString,
+        path::PathBuf,
         time::{Duration, SystemTime},
     };
 
-    use darwin_proc::{Pid, ResourceUsage, RunState, Status, TaskInfo, Terminal};
+    use darwin_proc::{
+        Gid, Pid, Protection, Region, ResourceCounters, ResourceUsage, RunState, ShareMode, Status,
+        TaskInfo, Terminal, Uid,
+    };
     use pretty_assertions::assert_eq;
     use procps_core::{
-        Field, Process, Usage,
+        Field, Process, RegionTotals, Usage,
+        helper::Caller,
         testing::{process, thread},
     };
     use rstest::rstest;
@@ -420,7 +436,7 @@ mod tests {
         names::Names,
         options::Modifiers,
         print::{
-            Context,
+            Context, Settings,
             tests::{TAKEN, resources, settings, snapshot, system, task},
         },
         specifier,
@@ -564,14 +580,15 @@ mod tests {
 
     /// The pids of `processes` sorted by `key`.
     fn sorted(processes: Vec<Process>, key: SortKey) -> Vec<i32> {
+        sorted_for(processes, key, settings(Modifiers::empty()))
+    }
+
+    /// The pids of `processes` sorted by `key`, for the caller and the other
+    /// settings in `settings`.
+    fn sorted_for(processes: Vec<Process>, key: SortKey, settings: Settings) -> Vec<i32> {
         let system = system();
         let snapshot = snapshot(processes);
-        let mut context = Context::new(
-            &snapshot,
-            &snapshot,
-            settings(Modifiers::empty()),
-            Names::new(&system),
-        );
+        let mut context = Context::new(&snapshot, &snapshot, settings, Names::new(&system));
         let mut tasks: Vec<_> = snapshot
             .processes
             .iter()
@@ -599,6 +616,184 @@ mod tests {
     #[case::foreground_group(key("tpgid", Order::Descending), vec![30, 20, 10])]
     fn each_item_sorts_by_procps_ng_s_value(#[case] key: SortKey, #[case] expected: Vec<i32>) {
         assert_eq!(sorted(three(), key), expected);
+    }
+
+    /// The values of Linux's private files and of `statm` that a process
+    /// sorts by.
+    #[derive(Clone, Copy)]
+    struct Private {
+        executable: &'static str,
+        group: u32,
+        descriptors: i32,
+        read: u64,
+        written: u64,
+        unique: u64,
+        children: Duration,
+        children_system: Duration,
+        resident: u64,
+        code: u64,
+        wired: u64,
+    }
+
+    /// A process with `pid` and the values `values`.
+    fn private(pid: i32, values: Private) -> Process {
+        let mut process = fixture(
+            pid,
+            "same",
+            100,
+            Duration::ZERO,
+            RunState::Waiting,
+            "a",
+            None,
+        );
+
+        process.executable = Field::Available(PathBuf::from(values.executable));
+        process.info.credentials.groups = vec![Gid::from(values.group)];
+        process =
+            process.with_file_descriptors(Field::Available((0..values.descriptors).collect()));
+        process.usage = Some(Usage {
+            task: Field::Available(TaskInfo {
+                resident_size: values.resident,
+                user_time: Duration::ZERO,
+                system_time: Duration::ZERO,
+                ..task()
+            }),
+            resources: Field::Available(ResourceUsage {
+                children_user_time: values.children,
+                children_system_time: values.children_system,
+                wired_size: values.wired,
+                ..resources()
+            }),
+            counters: Field::Available(ResourceCounters {
+                disk_bytes_read: values.read,
+                disk_bytes_written: values.written,
+                logical_writes: 0,
+                instructions: 0,
+                cycles: 0,
+                energy_nanojoules: 0,
+            }),
+        });
+        process.region_totals = Some(Field::Available(RegionTotals {
+            executable: values.code,
+            private_writable: 0,
+        }));
+        process.regions = Some(Field::Available(vec![Region {
+            address: 0,
+            size: values.unique,
+            protection: Protection::from(0x3),
+            max_protection: Protection::from(0x7),
+            share_mode: ShareMode::Private,
+            user_tag: 0,
+            resident: values.unique,
+            private_resident: values.unique,
+            shared_resident: 0,
+            shared_now_private: 0,
+            swapped_out: 0,
+            dirtied: 0,
+            reference_count: 1,
+            object_id: None,
+            is_submap: false,
+            is_shared: false,
+        }]));
+
+        process
+    }
+
+    /// Three processes whose private values put them in different orders.
+    fn three_private() -> Vec<Process> {
+        vec![
+            private(
+                10,
+                Private {
+                    executable: "/b",
+                    group: 20,
+                    descriptors: 3,
+                    read: 200,
+                    written: 100,
+                    unique: 64 << 10,
+                    children: Duration::from_secs(1),
+                    children_system: Duration::from_secs(5),
+                    resident: 32 << 20,
+                    code: 128 << 10,
+                    wired: 4 << 10,
+                },
+            ),
+            private(
+                20,
+                Private {
+                    executable: "/c",
+                    group: 0,
+                    descriptors: 5,
+                    read: 300,
+                    written: 50,
+                    unique: 128 << 10,
+                    children: Duration::from_secs(3),
+                    children_system: Duration::ZERO,
+                    resident: 16 << 20,
+                    code: 64 << 10,
+                    wired: 8 << 10,
+                },
+            ),
+            private(
+                30,
+                Private {
+                    executable: "/a",
+                    group: 12,
+                    descriptors: 1,
+                    read: 100,
+                    written: 200,
+                    unique: 32 << 10,
+                    children: Duration::from_secs(2),
+                    children_system: Duration::ZERO,
+                    resident: 64 << 20,
+                    code: 256 << 10,
+                    wired: 2 << 10,
+                },
+            ),
+        ]
+    }
+
+    // `exe` shows `-` for every process here, so sorting by the hidden paths
+    // would reveal their order.
+    #[test]
+    fn the_executable_sorts_as_ps_shows_it() {
+        let settings = Settings {
+            caller: Caller::new(Uid::from(502), Gid::from(20)),
+            ..settings(Modifiers::empty())
+        };
+
+        assert_eq!(
+            sorted_for(three_private(), key("exe", Order::Ascending), settings),
+            [10, 20, 30]
+        );
+    }
+
+    // The placeholders `vm_data`, `vm_stack`, `vm_lib` and `m_share`, and
+    // `lim`, sort by values that `ps` does not have, so every process has the
+    // same value.
+    #[rstest]
+    #[case::executable("exe", vec![30, 10, 20])]
+    #[case::group_ids("supgid", vec![20, 30, 10])]
+    #[case::group_names("supgrp", vec![30, 10, 20])]
+    #[case::descriptors("fds", vec![30, 10, 20])]
+    #[case::read("rbytes", vec![30, 10, 20])]
+    #[case::written("wbytes", vec![20, 10, 30])]
+    #[case::unique("uss", vec![30, 10, 20])]
+    #[case::children_user_time("cutime", vec![10, 30, 20])]
+    #[case::cpu_use_with_children("cuc", vec![30, 20, 10])]
+    #[case::resident_pages("resident", vec![20, 10, 30])]
+    #[case::code("vm_exe", vec![20, 10, 30])]
+    #[case::locked("vm_lock", vec![30, 10, 20])]
+    #[case::limit("lim", vec![10, 20, 30])]
+    #[case::data("vm_data", vec![10, 20, 30])]
+    #[case::stack("vm_stack", vec![10, 20, 30])]
+    #[case::libraries("vm_lib", vec![10, 20, 30])]
+    #[case::shared("m_share", vec![10, 20, 30])]
+    fn each_private_item_sorts_by_its_value(#[case] name: &str, #[case] expected: Vec<i32>) {
+        assert_eq!(
+            sorted(three_private(), key(name, Order::Ascending)),
+            expected
+        );
     }
 
     // procps-ng multiplies the ticks by 100 as a `float`, which rounds

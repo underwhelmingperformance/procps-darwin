@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "the headers and widths of exe, environ, fds, lim, supgid, supgrp, uss, rbytes, wbytes and cuc"
+command = ["ps", "--ppid", "{a1}", "-o", "exe,environ,fds,lim,supgid,supgrp,uss,rbytes,wbytes,cuc,pid"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
