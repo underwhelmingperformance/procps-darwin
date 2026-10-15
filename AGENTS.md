@@ -143,8 +143,11 @@ exporter.
   usage text, with exit status 0.
 - `ps` and `top` use parsers ported from procps-ng, because `ps` mixes UNIX, BSD
   and GNU syntax (`ps aux`, `ps -ef`, `ps opid,cmd`). The ported parsers produce
-  typed option structs. From uutils/procps `ps`, reuse the format-specifier
-  tables in `mapping.rs`; its `clap` parser rejects `ps aux`.
+  typed option structs. uutils/procps `ps` is not reused: its `clap` parser
+  rejects `ps aux`, and the table of format specifiers in its `mapping.rs` has
+  only their headers. `ps` uses a translation of the table in procps-ng's
+  `src/ps/output.c`, which also has each specifier's width and flags, the macros
+  and the AIX descriptors.
 
 ## Output
 
@@ -158,9 +161,11 @@ exporter.
   terminates the tools silently, as it terminates procps-ng, unless the parent
   ignores `SIGPIPE`. It also replaces a standard output or standard error that
   was closed with `/dev/null` opened for reading only, so that writes to it fail
-  with `EBADF`. `Output` fails writes to the stream with the lowest closed
-  descriptor with `EINVAL` instead, as a write to procps-ng's epoll descriptor
-  fails.
+  with `EBADF`. procps-ng's `pgrep` and `pkill` open an epoll descriptor, which
+  takes the lowest closed descriptor. Our `pgrep` and `pkill` therefore use
+  `Output::with_epoll_descriptor`, which fails writes to that stream with
+  `EINVAL`. procps-ng's `ps` has no epoll descriptor, so `ps` uses
+  `Output::new`, whose writes to a closed stream fail with `EBADF`.
 - The helper client sets `SO_NOSIGPIPE` on its socket, so a helper that closes
   the connection causes an error in the client, not a `SIGPIPE`.
 

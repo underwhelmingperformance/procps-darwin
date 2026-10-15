@@ -32,9 +32,6 @@ use crate::{
     strerror::strerror,
 };
 
-/// The version of procps-ng that the tools reproduce.
-const PROCPS_NG_VERSION: &str = "4.0.7";
-
 /// Runs `command` for the tool that `mode` selects, invoked as `program`, and
 /// returns the exit status.
 ///
@@ -76,17 +73,7 @@ pub fn main(
     // procps-ng's `close_stdout` reports it.
     let _ = match command {
         Command::Help => stdout.write_all(&usage::usage(mode, program)),
-        Command::Version => stdout.write_all(
-            &[
-                program.as_bytes(),
-                format!(
-                    " from procps-darwin {} (procps-ng {PROCPS_NG_VERSION})\n",
-                    env!("CARGO_PKG_VERSION")
-                )
-                .as_bytes(),
-            ]
-            .concat(),
-        ),
+        Command::Version => stdout.write_all(&crate::program::version(program)),
         Command::Run(options) => {
             let locale = Locale::current();
             let selection = match Selection::new(options) {

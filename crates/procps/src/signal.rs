@@ -10,7 +10,7 @@ use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 
 use darwin_proc::CaseFolding;
 
-use crate::c_number::strtol;
+use crate::c_number::{Base, strtol};
 
 /// Darwin's signals, by procps-ng's names and in procps-ng's order. The table
 /// also has Darwin's `EMT` and `INFO`, which Linux lacks, at the positions that
@@ -118,7 +118,7 @@ const DARWIN_ONLY: [&str; 2] = ["EMT", "INFO"];
 pub(crate) fn lookup(name: &OsStr, form: Form, folding: CaseFolding) -> Lookup {
     let name = name.as_bytes();
 
-    if let Some(number) = strtol(name) {
+    if let Some(number) = strtol(name, Base::Decimal) {
         if number.length != name.len() || number.overflowed {
             return Lookup::Unknown;
         }
@@ -189,7 +189,7 @@ fn is_real_time(name: &[u8], folding: CaseFolding) -> bool {
         return false;
     }
 
-    strtol(number).is_some_and(|parsed| {
+    strtol(number, Base::Decimal).is_some_and(|parsed| {
         parsed.length == number.len() && !parsed.overflowed && parsed.value <= REAL_TIME_SIGNALS
     })
 }

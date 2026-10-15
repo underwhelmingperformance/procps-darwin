@@ -4,4 +4,6 @@
 
 //! procps-ng's `ps` for macOS.
 
-fn main() {}
+fn main() -> std::process::ExitCode {
+    procps::ps::entry()
+}

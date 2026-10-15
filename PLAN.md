@@ -313,7 +313,9 @@ Task 3.2 records where each Darwin extension field falls.
 - `ps` and `top` use parsers ported from procps-ng. `ps` mixes BSD, UNIX and GNU
   forms in one command line, which `clap` cannot express. uutils/procps uses
   `clap` for `ps` and rejects `ps aux`, `ps -u USER`, `ps -s SID` and `--sort`
-  as a result. Its tables of format specifiers and headers can still be reused.
+  as a result. Its table of format specifiers has only their headers, so `ps`
+  uses a translation of procps-ng's table, which also has each specifier's width
+  and flags, the macros and the AIX descriptors.
 - Errors use `thiserror` in every crate. Each binary, or each set of binaries
   that share an entry function, has a top-level error enum, which decides the
   exit status.
@@ -1116,11 +1118,70 @@ value, so the nice-value test moves to task 5.7.
 
 ### Phase 5: ps
 
-#### 5.1 Option parsing
+#### 5.1 Option parsing (done)
 
 Port procps-ng's parser, including the UNIX, BSD and GNU syntaxes, the rules for
 mixing them, and the warning for `ps -aux`. Support the default personality
 first and the other `PS_PERSONALITY` values after the rest of phase 5.
+
+`procps::ps` translates `src/ps/parser.c`, and the parts of `global.c`,
+`select.c`, `sortformat.c`, `help.c` and `display.c` that parse the command line
+or handle options such as `--help`, with which procps-ng exits before it lists
+processes. The parser produces typed options: the selection, the columns and
+sort keys, the thread display, the process tree, the header and the screen size.
+Tasks 5.2 to 5.6 select, sort and print processes from them. Until then, `ps`
+exits with status 1 and a message saying that listing processes is not
+implemented, after any command line that would list processes.
+
+procps-ng parses the command line in up to two passes. The first pass reads an
+argument that is a dash followed by a letter, such as `-ef`, as UNIX options,
+and reads BSD options, long options and the trailing pids, such as `-123` for a
+process group, as they are. When the first pass fails, procps-ng resets its
+state and parses the whole command line again, now reading an argument that is a
+dash followed by a letter as BSD options. `ps -aux` is therefore `ps aux` when
+no user is called `x`. An error in a format or sort list, in the predefined
+formats or in the selection options also makes a pass fail, so each pass reads
+the format and sort lists, builds the formats and checks the selection options.
+The parser uses the specifier table from `src/ps/output.c` for that, with each
+specifier's header, width and flags. If the BSD pass also fails, `ps` reports
+the first pass's error. A personality that forces BSD syntax skips the first
+pass, and `ps` then reports the BSD pass's error. procps-ng 4.0.7 prints no
+warning for `ps -aux`, although its FAQ still describes one.
+
+The parser keeps procps-ng's quirks where the reference harness shows them.
+procps-ng writes its message for the first unknown specifier of the run into a
+static buffer of 80 bytes, so the message is cut to 79 bytes, and every later
+unknown specifier gets the same message. When the parser uses `PS_FORMAT` and
+its value is not a valid format list, procps-ng warns with the error, and for an
+unknown specifier the error is the saved message. `-D` reads on after its value,
+so the rest of `-Dabc` is read as options too. procps-ng computes the screen
+size and warns about a small screen when it starts, and again when it resets its
+state for the BSD pass. The warning therefore comes twice whenever the BSD pass
+runs, including with a personality that skips the first pass. BSD's `T`, and `t`
+without a list, select the terminal of `ps` itself, which task 5.2 reads. An
+argument that starts with `--` and a non-ASCII letter is a long option only in a
+locale where glibc's `iswalpha` accepts the letter. `docs/mappings.md` describes
+how the tools approximate glibc's classes.
+
+The parser applies every personality that procps-ng knows, because
+`set_personality` only sets flags and the names of macros for the predefined
+formats. An unknown name selects the defaults, as in procps-ng. The scenarios
+check the parser's errors with the `bsd` personality, and the output of the
+other personalities needs the formatter of task 5.3.
+
+Every error exits with status 1, as in procps-ng. No selection option of `ps` is
+for a Linux concept. `-M`, `Z` and `--context` add columns, which task 5.4 shows
+as `-`. `-V` prints `ps from procps-darwin <version> (procps-ng 4.0.7)`, as
+`pgrep -V` does. `--info` prints procps-ng's debugging information, with
+Darwin's values, and leaves out the line with the versions of glibc and gcc.
+
+procps-ng's `ps` has no epoll descriptor, so with standard output closed it
+reports `write error: Bad file descriptor`. `procps::output::Output::new` gives
+`ps` C's streams without the epoll behaviour of `pgrep`, which
+`Output::with_epoll_descriptor` keeps.
+
+procps-ng's `main` also installs handlers for most signals, which `ps` does not
+install yet.
 
 #### 5.2 Process selection
 

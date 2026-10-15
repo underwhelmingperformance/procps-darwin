@@ -460,6 +460,7 @@ name = "procps"
 version = "0.1.0"
 dependencies = [
  "assert_matches",
+ "bitflags",
  "clap",
  "darwin-proc",
  "libc",

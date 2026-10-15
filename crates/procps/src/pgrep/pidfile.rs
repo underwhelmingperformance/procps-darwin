@@ -23,7 +23,10 @@ use rustix::{
     io::Errno,
 };
 
-use crate::{c_number::strtol, pgrep::PgrepError};
+use crate::{
+    c_number::{Base, strtol},
+    pgrep::PgrepError,
+};
 
 /// The longest line that procps-ng reads from a pid file: its buffer has 256
 /// bytes, and `fgets` keeps one for the terminating NUL.
@@ -152,7 +155,7 @@ fn read_from(fd: BorrowedFd<'_>, reader: impl BufRead, lock: bool) -> Result<i64
         line.truncate(nul);
     }
 
-    let Some(number) = strtol(&line) else {
+    let Some(number) = strtol(&line, Base::Decimal) else {
         return Err(PgrepError::InvalidPidfile);
     };
     let ends_well = line

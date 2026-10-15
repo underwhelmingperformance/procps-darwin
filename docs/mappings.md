@@ -259,6 +259,17 @@ time of boot, then count the ticks between boot and the start. If the wall clock
 has been set since a process started, the process's start tick is offset by the
 size of the change, but never to before tick 0.
 
+## `ps --info`
+
+procps-ng's `--info` prints the device number of its terminal as Linux's major
+and minor numbers, and its page size. `ps` uses Darwin's layout of a device
+number: the major number is the top 8 bits, and the minor number is the low 24
+bits. Without a controlling terminal, both numbers are 0, as in procps-ng. On
+Apple silicon the page size is 16384. procps-ng prints the effective user ID
+with `%d`, so an ID above 2147483647 is negative, and `ps` prints it the same
+way: `nobody`'s ID, 4294967294, is `-2`. procps-ng also prints the glibc and GCC
+versions that it was compiled with, which `ps` leaves out.
+
 ## `kernel_task`
 
 `kernel_task` has process ID 0, and even root cannot read its executable path,
@@ -420,6 +431,18 @@ a signal and `pkill -int` is read as the options `-i`, `-n` and `-t`. In
 glibc's rules for the locale. glibc gives `tr_TR`'s rules to other locales, such
 as `az_AZ` and `ku_TR`, and has rules of its own for `mt_MT`, but Darwin
 installs none of them.
+
+procps-ng's `ps` decides how to read an argument from its first bytes, with
+glibc's `isalpha` and, after `--`, `iswalpha`. Both follow the `LC_CTYPE`
+locale. In the C locale and in UTF-8 locales, `isalpha` accepts only the ASCII
+letters, and in a UTF-8 locale `iswalpha` accepts letters outside ASCII too. So
+`ps --é` is an unknown long option in `C.UTF-8` and garbage in `C`.
+
+`ps` approximates these classes. In a UTF-8 locale, it decodes the first
+character and accepts it if Unicode classifies it as alphabetic. In another
+encoding, it decodes the first byte on its own, so the first byte of a character
+that has several bytes, as in Shift JIS, is not a letter. glibc's classes also
+depend on the locale, and not only on its encoding.
 
 ## Regular expressions
 

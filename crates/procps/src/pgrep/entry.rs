@@ -31,7 +31,7 @@ pub fn entry(fallback: &str) -> ExitCode {
     let program = crate::program_name(&arguments, fallback);
     let mode = Mode::from_program(&program);
 
-    let mut output = Output::new();
+    let mut output = Output::with_epoll_descriptor();
     let parsed = Options::parse(mode, arguments);
 
     if let Ok(Command::Run(options)) = &parsed
