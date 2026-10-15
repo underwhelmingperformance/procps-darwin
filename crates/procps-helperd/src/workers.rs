@@ -17,12 +17,25 @@ use darwin_proc::Uid;
 /// becomes free, the request whose user has the fewest snapshots running goes
 /// next, and requests from the same user go in the order that they arrived.
 /// One user who sends many requests therefore delays mostly their own.
+///
+/// `observer` learns when a request joins the queue. The helper uses `()`,
+/// which does nothing, and a test can use an observer that records the event.
 #[derive(Debug)]
-pub(crate) struct Workers {
+pub(crate) struct Workers<O: QueueObserver = ()> {
     state: Mutex<State>,
     freed: Condvar,
     limit: NonZeroUsize,
+    observer: O,
 }
+
+/// Learns when a request joins the queue of [`Workers`].
+pub(crate) trait QueueObserver: Send + Sync {
+    /// Called when a request has joined the queue, while the workers' lock is
+    /// held.
+    fn queued(&self) {}
+}
+
+impl QueueObserver for () {}
 
 /// The snapshots that are running and the requests that are waiting.
 #[derive(Debug, Default)]
@@ -50,10 +63,19 @@ impl State {
 impl Workers {
     /// Workers for at most `limit` snapshots at once.
     pub(crate) fn new(limit: NonZeroUsize) -> Self {
+        Self::observed(limit, ())
+    }
+}
+
+impl<O: QueueObserver> Workers<O> {
+    /// Workers for at most `limit` snapshots at once, which tell `observer`
+    /// when a request joins the queue.
+    pub(crate) fn observed(limit: NonZeroUsize, observer: O) -> Self {
         Self {
             state: Mutex::new(State::default()),
             freed: Condvar::new(),
             limit,
+            observer,
         }
     }
 
@@ -68,11 +90,12 @@ impl Workers {
 
     /// Waits until a worker is free and it is the turn of `uid`'s request, and
     /// returns the worker, or returns `None` when `until` passes first.
-    pub(crate) fn wait(self: &Arc<Self>, uid: Uid, until: Instant) -> Option<Worker> {
+    pub(crate) fn wait(self: &Arc<Self>, uid: Uid, until: Instant) -> Option<Worker<O>> {
         let mut state = self.state();
         let ticket = state.next_ticket;
         state.next_ticket += 1;
         state.waiting.push((ticket, uid));
+        self.observer.queued();
 
         loop {
             if state.total < self.limit.get() && state.next() == Some(ticket) {
@@ -114,12 +137,12 @@ impl Workers {
 
 /// A worker taken for one snapshot. Dropping it frees the worker.
 #[derive(Debug)]
-pub(crate) struct Worker {
-    workers: Arc<Workers>,
+pub(crate) struct Worker<O: QueueObserver = ()> {
+    workers: Arc<Workers<O>>,
     uid: Uid,
 }
 
-impl Drop for Worker {
+impl<O: QueueObserver> Drop for Worker<O> {
     fn drop(&mut self) {
         let mut state = self.workers.state();
         state.total -= 1;
@@ -140,14 +163,46 @@ impl Drop for Worker {
 mod tests {
     use std::{
         num::NonZeroUsize,
-        sync::Arc,
+        sync::{Arc, Condvar, Mutex, PoisonError},
         time::{Duration, Instant},
     };
 
     use darwin_proc::Uid;
     use pretty_assertions::assert_eq;
 
-    use super::{State, Workers};
+    use super::{QueueObserver, State, Workers};
+
+    /// Counts the requests that have joined the queue.
+    #[derive(Debug, Default)]
+    struct Queued {
+        count: Mutex<u64>,
+        changed: Condvar,
+    }
+
+    impl QueueObserver for Queued {
+        fn queued(&self) {
+            *self.count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+            self.changed.notify_all();
+        }
+    }
+
+    impl Queued {
+        fn count(&self) -> u64 {
+            *self.count.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
+        /// Waits until more than `count` requests have joined the queue, for at
+        /// most a minute, and returns whether they did.
+        fn wait_beyond(&self, count: u64) -> bool {
+            let queued = self.count.lock().unwrap_or_else(PoisonError::into_inner);
+            let (queued, _) = self
+                .changed
+                .wait_timeout_while(queued, Duration::from_secs(60), |queued| *queued <= count)
+                .unwrap_or_else(PoisonError::into_inner);
+
+            *queued > count
+        }
+    }
 
     #[test]
     fn a_user_with_fewer_snapshots_running_goes_first() {
@@ -178,8 +233,11 @@ mod tests {
     fn a_free_worker_goes_to_a_waiting_request_at_once() {
         // Repeat, because a lost wakeup shows up only in some interleavings.
         for _ in 0..10 {
-            let workers = Arc::new(Workers::new(NonZeroUsize::MIN.saturating_add(2)));
-            let far = Instant::now() + Duration::from_secs(5);
+            let workers = Arc::new(Workers::observed(
+                NonZeroUsize::MIN.saturating_add(2),
+                Queued::default(),
+            ));
+            let far = Instant::now() + Duration::from_secs(60);
             let freed = [
                 workers.wait(Uid::from(9), far),
                 workers.wait(Uid::from(9), far),
@@ -190,25 +248,34 @@ mod tests {
                 // User 1's request waits first. If it wakes first, it finds
                 // that user 2's request is next and waits again. Each waiter
                 // keeps the worker that it gets, so that freeing it does not
-                // wake the other waiter. If a waiter's wakeup is lost, it
-                // sleeps until its deadline, two seconds later, so the test
-                // requires each waiter to get a worker within one second.
+                // wake the other waiter. A waiter whose wakeup is lost sleeps
+                // until its deadline, a minute later, so the test requires
+                // each waiter to get a worker within half that time.
                 let waiters = [Uid::from(1), Uid::from(2)].map(|uid| {
                     let workers = &workers;
+                    let queued = workers.observer.count();
                     let waiter = scope.spawn(move || {
                         let started = Instant::now();
-                        let worker = workers.wait(uid, started + Duration::from_secs(2));
+                        let worker = workers.wait(uid, started + Duration::from_secs(60));
 
                         (worker, started.elapsed())
                     });
-                    std::thread::sleep(Duration::from_millis(5));
+
+                    // The next waiter starts only after this waiter's request
+                    // has joined the queue. The count only increases, so the
+                    // test sees the event even if the waiter has already left
+                    // the queue with a worker.
+                    assert!(
+                        workers.observer.wait_beyond(queued),
+                        "the request did not join the queue within a minute"
+                    );
                     waiter
                 });
                 drop(freed);
 
                 waiters.map(|waiter| {
                     waiter.join().is_ok_and(|(worker, waited)| {
-                        worker.is_some() && waited < Duration::from_secs(1)
+                        worker.is_some() && waited < Duration::from_secs(30)
                     })
                 })
             });
