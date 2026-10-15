@@ -202,12 +202,12 @@ set size, scheduling policy names and the `f` flags column.
 
 ### Crates
 
-| Crate            | Contents                                                                                                                                                                                                                         |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `darwin-proc`    | FFI declarations that the `libc` crate lacks, and safe readers for processes, threads, memory regions and system statistics. Errors distinguish a process that has exited, a denied read, and an unsupported call.               |
-| `procps-core`    | Domain model, the `ProcessSource` trait and its implementations, the helper protocol and client, process selection shared by all four tools, and formatting helpers (times, sizes, terminal names, cached user and group names). |
-| `procps-helperd` | The root helper daemon.                                                                                                                                                                                                          |
-| `procps`         | The `ps`, `top`, `pgrep` and `pkill` binaries.                                                                                                                                                                                   |
+| Crate            | Contents                                                                                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `darwin-proc`    | FFI declarations that the `libc` crate lacks, and safe readers for processes, threads, memory regions and system statistics. It also sets locales as glibc reads their names. Errors distinguish a process that has exited, a denied read, and an unsupported call. |
+| `procps-core`    | Domain model, the `ProcessSource` trait and its implementations, the helper protocol and client, process selection shared by all four tools, and formatting helpers (times, sizes, terminal names, cached user and group names).                                    |
+| `procps-helperd` | The root helper daemon.                                                                                                                                                                                                                                             |
+| `procps`         | The `ps`, `top`, `pgrep` and `pkill` binaries.                                                                                                                                                                                                                      |
 
 The `libc` crate (0.2.189) already declares `proc_pidinfo`, `proc_pid_rusage`,
 `proc_listallpids`, `proc_bsdinfo`, `proc_taskinfo`, `proc_threadinfo`,
@@ -387,9 +387,10 @@ In the container, glibc has its built-in `C` and `POSIX` locales and the
 `C.UTF-8` locale that nixpkgs compiles into its output, and no time zone files.
 procps-ng would fall back to `C` for any other locale, and would read a time
 zone name such as `Europe/London` as UTC, so the golden file would record output
-for a different setting. The table therefore accepts only those three locales.
-For `TZ` it accepts only `UTC` and the POSIX `TZ` strings that glibc and macOS
-read in the same way, which `scenario.rs` describes.
+for a different setting. The table therefore accepts only those three locales,
+and the name `C.utf8`, which glibc and the tools read as `C.UTF-8`. For `TZ` it
+accepts only `UTC` and the POSIX `TZ` strings that glibc and macOS read in the
+same way, which `scenario.rs` describes.
 
 Masking replaces a pid with a name but leaves the spaces before it, so the
 harness gives every masked process a five-digit pid. It starts processes until

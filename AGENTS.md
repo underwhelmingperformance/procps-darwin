@@ -180,10 +180,11 @@ exporter.
   leaves out `LC_ALL=C`. The table must not set `PATH` or `HOME`, because the
   harness needs them to find the tools and to give each run an empty home
   directory. The reference container has only the `C`, `POSIX` and `C.UTF-8`
-  locales and no time zone files, so a locale must be one of those three. `TZ`
-  must be `UTC` or a POSIX `TZ` string such as `JST-9` or
-  `GMT0BST,M3.5.0/1,M10.5.0` that glibc and macOS read in the same way: summer
-  time needs two `M` rules in months 2 to 11, at least two months apart.
+  locales and no time zone files, so a locale must be one of those three, or
+  `C.utf8`, which glibc and the tools read as `C.UTF-8`. `TZ` must be `UTC` or a
+  POSIX `TZ` string such as `JST-9` or `GMT0BST,M3.5.0/1,M10.5.0` that glibc and
+  macOS read in the same way: summer time needs two `M` rules in months 2 to 11,
+  at least two months apart.
 
 ## Development environment
 
