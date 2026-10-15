@@ -22,7 +22,7 @@ use crate::{
     output::WriteFailure,
     pgrep::{Mode, usage},
     signal::LinuxSignal,
-    strerror::strerror,
+    strerror::{describe, os_message},
 };
 
 /// An option for a Linux concept that Darwin lacks.
@@ -160,52 +160,6 @@ enum Shape {
     WithHelpHint,
     /// Only the message.
     Alone,
-}
-
-/// `error` and its sources, separated by colons. Each operating-system error
-/// has the description from [`os_message`], which leaves out Rust's `(os error
-/// N)`. A source whose message already ends the previous message is left out,
-/// because some errors include their source in their own message.
-fn describe(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut described = String::new();
-    let mut previous = String::new();
-    let mut next = Some(error);
-
-    while let Some(error) = next {
-        let mut message = match error.downcast_ref::<io::Error>() {
-            Some(error) => os_message(error),
-            None => error.to_string(),
-        };
-
-        if let Some(source) = error
-            .source()
-            .and_then(|source| source.downcast_ref::<io::Error>())
-            && let Some(start) = message.strip_suffix(&source.to_string())
-        {
-            message = format!("{start}{}", os_message(source));
-        }
-
-        if !previous.ends_with(&message) {
-            if !described.is_empty() {
-                described.push_str(": ");
-            }
-
-            described.push_str(&message);
-        }
-
-        previous = message;
-        next = error.source();
-    }
-
-    described
-}
-
-/// glibc's description of `error`, or Darwin's for an error that Linux lacks,
-/// without Rust's `(os error N)`.
-fn os_message(error: &io::Error) -> String {
-    error
-        .raw_os_error()
-        .map_or_else(|| error.to_string(), strerror)
 }
 
 impl PgrepError {

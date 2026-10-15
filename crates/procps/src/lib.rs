@@ -6,6 +6,7 @@
 //! and `pkill` call [`pgrep::entry`], and `ps` calls [`ps::entry`].
 
 mod c_number;
+mod linux;
 pub mod observability;
 pub mod output;
 pub mod pgrep;
