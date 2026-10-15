@@ -87,6 +87,12 @@ pub enum Call {
     /// `kill`, which sends a signal.
     #[display("kill")]
     Signal,
+    /// `sigaction`, which installs a signal handler.
+    #[display("sigaction")]
+    SignalAction,
+    /// `pthread_sigmask`, which changes the calling thread's signal mask.
+    #[display("pthread_sigmask")]
+    SignalMask,
 }
 
 /// An error from a call to the kernel.

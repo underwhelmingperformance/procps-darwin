@@ -255,10 +255,12 @@ impl FromIterator<libc::c_int> for ClosedDescriptors {
 /// start-up fail, as such a write would fail if Rust's runtime had not
 /// replaced the descriptor. Rust's runtime changes both before `main` runs.
 ///
-/// procps-ng's tools keep the inherited disposition and leave the closed
-/// descriptors closed. With `SIGPIPE` inherited as ignored, a write to a closed
-/// pipe fails with `EPIPE`, which procps-ng does not report. Otherwise
-/// `SIGPIPE` ends the tool, as `ps aux | head` ends procps-ng's `ps`. A
+/// procps-ng's `pgrep` and `pkill` keep the inherited disposition, and
+/// procps-ng's tools leave the closed descriptors closed. With `SIGPIPE`
+/// inherited as ignored, a write to a closed pipe fails with `EPIPE`, which
+/// procps-ng does not report. Otherwise `SIGPIPE` ends the tool, as
+/// `pgrep -a . | head` ends procps-ng's `pgrep`. procps-ng's `ps` catches
+/// `SIGPIPE` instead, which [`catch_signals`](crate::catch_signals) can do. A
 /// standard output or standard error that was closed at start-up becomes
 /// `/dev/null` opened for reading only, so that writes to it fail with `EBADF`,
 /// as procps-ng's writes to a closed stream fail. procps-ng's epoll descriptor
