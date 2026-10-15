@@ -27,9 +27,9 @@ const COMM_MAX: usize = 15;
 /// The locales that a scenario may set. In the reference container, glibc has
 /// its built-in `C` and `POSIX` locales and the `C.UTF-8` locale that nixpkgs
 /// compiles into glibc's output, and no others, so procps-ng would fall back to
-/// `C` for any other locale. glibc also accepts the name `C.utf8`, which macOS
-/// lacks.
-const LOCALES: [&str; 3] = ["C", "POSIX", "C.UTF-8"];
+/// `C` for any other locale. glibc also reads the name `C.utf8` as `C.UTF-8`,
+/// and so does `darwin_proc::set_locale`.
+const LOCALES: [&str; 4] = ["C", "POSIX", "C.UTF-8", "C.utf8"];
 
 /// The time zones that a scenario may set: `UTC`, or a POSIX `TZ` string that
 /// glibc 2.44 and macOS read in the same way.

@@ -188,6 +188,10 @@ pub struct MachTimebaseInfo {
     pub denom: u32,
 }
 
+/// `LC_GLOBAL_LOCALE` from `<xlocale.h>`, which the `libc` crate does not
+/// declare for Darwin.
+pub const LC_GLOBAL_LOCALE: libc::locale_t = std::ptr::without_provenance_mut(usize::MAX);
+
 unsafe extern "C" {
     /// `mach_continuous_time` from `<mach/mach_time.h>`, which the `libc` crate
     /// does not declare.

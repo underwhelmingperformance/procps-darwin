@@ -205,3 +205,72 @@ behave as on Linux.
 its command line or its memory regions. Its `exe` column therefore shows `-`,
 its command line shows `[kernel_task]` as for a Linux kernel thread, and the
 region columns show `-`.
+
+## Locales
+
+glibc normalises the codeset in a locale name, so `C.utf8` and
+`en_US.ISO-8859-1` refer to the locales that Darwin calls `C.UTF-8` and
+`en_US.ISO8859-1`. The tools use the installed Darwin locale that has the same
+language and modifier, and a codeset that is the same after glibc's
+normalisation.
+
+On Linux, glibc has the `C` and `POSIX` locales built in, and any other locale
+exists only if the system has generated it. Distributions generate locales from
+the names in glibc's `localedata/SUPPORTED` file, and an administrator can
+generate others with `localedef`. That file has no `en_US.ISO-8859-15` or
+`ja_JP.SJIS`, although Darwin installs both. darwin-proc lists the names in that
+file for the languages that Darwin installs, and the tools fail to set any other
+name with a codeset, as procps-ng fails on a system that has generated only the
+locales in that file.
+
+glibc's `setlocale` also reads the aliases in glibc's `locale.alias`, such as
+`german` for `de_DE.ISO-8859-1` and `no_NO.ISO-8859-1` for `nb_NO.ISO-8859-1`,
+and compares a name with an alias without regard to case. The tools read the
+same aliases.
+
+A locale name without a codeset can refer to a different encoding on each
+system. Darwin's `en_US` is a UTF-8 locale, and Darwin reports its codeset as an
+empty string, whereas glibc's `en_US` uses ISO 8859-1. For such a name, the
+tools use the Darwin locale with glibc's codeset, here `en_US.ISO8859-1`.
+darwin-proc lists glibc's codeset for each locale name that Darwin installs
+without a codeset. glibc lacks `fa_AF`, `se_FI` and `sr_YU`, so procps-ng and
+the tools both fail to set these locales and stay in the C locale. For `ar_AE`,
+`ar_EG`, `ar_JO`, `ar_MA`, `ar_QA`, `ar_SA`, `en_PH`, `es_CR`, `ga_IE` and
+`he_IL`, Darwin has no locale with glibc's codeset, and the tools use Darwin's
+locale of that name.
+
+Darwin also installs a locale called `UTF-8`, which glibc lacks, and the
+Terminal app on macOS sets `LC_CTYPE=UTF-8`. procps-ng would run in the C locale
+for that setting and escape every byte outside ASCII. The tools use Darwin's
+`UTF-8` locale instead, so that names and command lines outside ASCII stay
+readable in the terminal.
+
+glibc also has names with a modifier but no codeset, such as `de_DE@euro` and
+`sr_RS@latin`. The tools use glibc's codeset for such a name. Darwin lacks most
+of these modifiers, so the tools leave out a modifier that Darwin lacks:
+`de_DE@euro` is `de_DE.ISO8859-15`. A locale with a modifier can collate
+differently from the locale without it.
+
+glibc has six categories that Darwin lacks: `LC_PAPER`, `LC_NAME`, `LC_ADDRESS`,
+`LC_TELEPHONE`, `LC_MEASUREMENT` and `LC_IDENTIFICATION`.
+`setlocale(LC_ALL, "")` fails in procps-ng when the environment gives one of
+them a locale that does not exist, so the tools check those variables too. They
+check that Darwin installs the locale, which gives glibc's answer for every
+locale that both systems have.
+
+The tools also fail to set a locale that glibc has and Darwin does not install,
+such as `en_DK.UTF-8`. They then stay in the C locale and escape every byte
+outside ASCII. On Linux, procps-ng uses the locale if the system has generated
+it. The same applies to the categories that only glibc has, so
+`LC_PAPER=en_DK.UTF-8` has this effect too. macOS's SSH server accepts the
+variables `LANG` and `LC_*`, so a session from Linux can bring such a setting
+with it.
+
+procps-ng compares signal names with glibc's `strcasecmp`, which folds case as
+the `LC_CTYPE` locale does. glibc's Turkish locales pair `i` with `İ` and `I`
+with `ı`. In `tr_TR.UTF-8`, `i` and `I` therefore do not match, so `int` is not
+a signal and `pkill -int` is read as the options `-i`, `-n` and `-t`. In
+`tr_TR.ISO-8859-9`, `ı` (0xFD) matches `I`. The tools compare signal names with
+glibc's rules for the locale. glibc gives `tr_TR`'s rules to other locales, such
+as `az_AZ` and `ku_TR`, and has rules of its own for `mt_MT`, but Darwin
+installs none of them.
