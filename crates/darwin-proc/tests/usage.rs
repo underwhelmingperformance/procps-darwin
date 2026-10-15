@@ -4,35 +4,42 @@
 
 //! Reads CPU, memory and thread data of live processes.
 
-use std::{
-    io::{BufRead, BufReader},
-    process::{Command, Stdio},
-    sync::mpsc,
-    time::Duration,
-};
+use std::{process::Command, sync::mpsc, time::Duration};
 
 use assert_matches::assert_matches;
 use darwin_proc::{Error, Pid, RunState, SchedulingPolicy, Status};
 use pretty_assertions::assert_eq;
 
-/// A single-threaded shell that uses some CPU time, then waits until its
-/// standard input closes.
+/// A single-threaded shell that uses some CPU time, then stops itself, so
+/// its CPU times stop changing.
 struct BusyChild(std::process::Child);
 
+/// An error from [`BusyChild::start`].
+#[derive(Debug, thiserror::Error)]
+enum StartError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Wait(#[from] rustix::io::Errno),
+    #[error("the shell changed state without stopping: {0:?}")]
+    NotStopped(Option<rustix::process::WaitStatus>),
+}
+
 impl BusyChild {
-    fn start() -> std::io::Result<Self> {
-        let mut child = Command::new("/bin/sh")
+    /// Starts the shell and returns once it has stopped.
+    fn start() -> Result<Self, StartError> {
+        let child = Command::new("/bin/sh")
             .args([
                 "-c",
-                "i=0; while [ $i -lt 300000 ]; do i=$((i + 1)); done; echo done; read line",
+                "i=0; while [ $i -lt 300000 ]; do i=$((i + 1)); done; kill -STOP $$",
             ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
             .spawn()?;
-        let mut line = String::new();
+        let pid = rustix::process::Pid::from_child(&child);
+        let changed = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::UNTRACED)?
+            .map(|(_, status)| status);
 
-        if let Some(stdout) = child.stdout.take() {
-            BufReader::new(stdout).read_line(&mut line)?;
+        if !changed.is_some_and(rustix::process::WaitStatus::stopped) {
+            return Err(StartError::NotStopped(changed));
         }
 
         Ok(Self(child))
@@ -45,7 +52,7 @@ impl BusyChild {
 
 impl Drop for BusyChild {
     fn drop(&mut self) {
-        drop(self.0.stdin.take());
+        let _ = self.0.kill();
         let _ = self.0.wait();
     }
 }
@@ -58,18 +65,6 @@ fn close(a: Duration, b: Duration) -> bool {
 fn the_task_its_usage_and_its_thread_agree_on_cpu_time() -> Result<(), Box<dyn std::error::Error>> {
     let child = BusyChild::start()?;
     let pid = child.pid()?;
-
-    // The shell prints `done` before it calls `read`, so poll until its thread
-    // is in the waiting state.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while pid.threads()?.first().map(|thread| thread.run_state) != Some(RunState::Waiting) {
-        if std::time::Instant::now() > deadline {
-            return Err("the child never started to wait".into());
-        }
-
-        std::thread::yield_now();
-    }
-
     let task = pid.task_info()?;
     let (usage, _) = pid.resource_usage()?;
     let threads = pid.threads()?;
@@ -83,17 +78,9 @@ fn the_task_its_usage_and_its_thread_agree_on_cpu_time() -> Result<(), Box<dyn s
             close(task.user_time, thread.user_time),
             close(usage.user_time, thread.user_time),
             task.user_time > Duration::from_millis(50),
-            thread.run_state,
             thread.policy,
         ),
-        (
-            1,
-            true,
-            true,
-            true,
-            RunState::Waiting,
-            SchedulingPolicy::Timeshare,
-        )
+        (1, true, true, true, SchedulingPolicy::Timeshare)
     );
 
     Ok(())
@@ -121,6 +108,22 @@ fn a_named_thread_is_listed_by_name() -> Result<(), Box<dyn std::error::Error>> 
     thread.join().map_err(|_| "the thread panicked")?;
 
     assert_eq!(names, ["darwin-proc-test"]);
+
+    Ok(())
+}
+
+#[test]
+fn a_thread_of_this_process_is_running() -> Result<(), Error> {
+    let states: Vec<RunState> = Pid::current()
+        .threads()?
+        .into_iter()
+        .map(|thread| thread.run_state)
+        .collect();
+
+    assert!(
+        states.contains(&RunState::Running),
+        "no thread is running: {states:?}"
+    );
 
     Ok(())
 }
