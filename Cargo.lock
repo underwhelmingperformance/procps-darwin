@@ -433,9 +433,14 @@ dependencies = [
 name = "procps"
 version = "0.1.0"
 dependencies = [
+ "darwin-proc",
+ "libc",
  "libtest-mimic",
  "pretty_assertions",
  "procps-harness",
+ "rstest",
+ "rustix",
+ "tempfile",
  "thiserror",
 ]
 
