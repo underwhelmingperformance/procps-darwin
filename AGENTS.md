@@ -171,6 +171,9 @@ exporter.
   option. Scenarios then run in parallel without seeing each other's fixtures.
   Generation rejects a scenario whose outcome changes when processes with the
   fixtures' names run outside the session.
+- A scenario's command must not stop the session leader. The harness reports a
+  stop that it sees, but it can miss a stop that a `SIGCONT` undoes at once, and
+  the outcome then depends on timing.
 
 ## Development environment
 

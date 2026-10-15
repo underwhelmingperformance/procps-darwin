@@ -367,8 +367,9 @@ command selects only processes in that session, for example with `pgrep -s 0`.
 The runner also starts a decoy for each fixture, with the same name, outside the
 session. A command that signals a decoy fails the run, and generation runs each
 scenario with and without decoys and rejects it if the outcomes differ. Runs are
-therefore independent, and the tests run them in parallel. When the leader
-exits, or a timeout passes, the runner kills every process left in the session.
+therefore independent, and the tests run them in parallel. When the leader exits
+or stops, or a timeout passes, the runner sends `SIGKILL` to the leader and to
+its process group.
 
 Output that depends on processes outside the session, such as `ps -e`, bare `ps`
 and the summary area of `top`, cannot be checked this way; it belongs in
