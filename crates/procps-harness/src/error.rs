@@ -102,6 +102,11 @@ pub enum Error {
         /// How long the scenario was allowed to run.
         after: Duration,
     },
+    /// The runner's [`Expiry`](crate::Expiry) ended the wait for the session
+    /// leader, so the runner sent `SIGKILL` to the leader and its process
+    /// group.
+    #[error("the runner's expiry ended the scenario")]
+    Expired,
     /// A signal terminated the session leader, probably sent by a command that
     /// signals every process in its session.
     #[error("the session leader was killed by {0}")]

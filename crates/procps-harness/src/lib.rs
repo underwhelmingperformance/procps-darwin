@@ -27,5 +27,5 @@ pub use credentials::Credentials;
 pub use error::Error;
 pub use host::host;
 pub use outcome::{FixtureEnd, Outcome, Stream};
-pub use runner::{Generation, Runner};
+pub use runner::{Expiry, Generation, Runner};
 pub use scenario::{Scenario, ScenarioFile};

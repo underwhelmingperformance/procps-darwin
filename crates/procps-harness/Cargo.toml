@@ -32,6 +32,7 @@ toml.workspace = true
 assert_matches.workspace = true
 pretty_assertions.workspace = true
 rstest.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 darwin-proc.workspace = true
