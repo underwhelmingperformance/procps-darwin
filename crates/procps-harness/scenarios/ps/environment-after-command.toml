@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "e shows the environment after the command, and nothing for a process without one"
+command = ["ps", "e", "-o", "pid,args", "-p", "{a1},{b1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+environment = { HARNESS_A = "one", HARNESS_B = "two" }
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

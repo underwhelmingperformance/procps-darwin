@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+COMMAND                PID
+harness-alpha HARNES {a1}
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
