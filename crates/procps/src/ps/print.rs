@@ -1472,6 +1472,7 @@ pub(crate) mod tests {
             peak_physical_footprint: 0,
             children_user_time: Duration::ZERO,
             children_system_time: Duration::ZERO,
+            children_pageins: 0,
         }
     }
 
