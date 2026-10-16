@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+  PID   TIME     TIME  C  CP %CPU
+{a1}   0:00 00:00:00  0   0  0.0
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
