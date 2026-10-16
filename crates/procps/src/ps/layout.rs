@@ -9,7 +9,7 @@
 
 // Translated from procps-ng v4.0.7 src/ps/output.c and src/ps/display.c.
 
-use std::io::Write;
+use std::{borrow::Cow, io::Write};
 
 use crate::ps::{
     format::{Column, Content},
@@ -22,6 +22,10 @@ use crate::ps::{
 /// (`SPACE_AMOUNT`).
 const SPACE_AMOUNT: i64 = 144;
 
+/// The least width of a signal mask column with `--signames`
+/// (`SIGNAL_NAME_WIDTH`).
+const SIGNAL_NAME_WIDTH: usize = 27;
+
 /// How procps-ng aligns a column, from its `CF_JUST_MASK` flags. Text
 /// between the descriptors of an AIX format has no flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,8 +37,17 @@ enum Alignment {
 }
 
 impl Alignment {
-    fn of(column: &Column) -> Self {
+    /// The alignment of `column`. With `--signames`, procps-ng's
+    /// `check_header_width` replaces the flags of a signal mask column with
+    /// `CF_UNLIMITED`, so the column is aligned on the left and the last
+    /// column takes the rest of the line.
+    fn of(column: &Column, signal_names: bool) -> Self {
         match column.content {
+            Content::Specifier(specifier)
+                if signal_names && specifier.justification == Justification::Signal =>
+            {
+                Self::Specifier(Justification::Unlimited)
+            }
             Content::Specifier(specifier) => Self::Specifier(specifier.justification),
             Content::Text => Self::Text,
         }
@@ -58,16 +71,18 @@ pub(crate) struct Settings {
 /// column starts, and when the header is printed.
 #[derive(Debug)]
 pub(crate) struct Layout<'c> {
-    columns: &'c [Column],
+    columns: Cow<'c, [Column]>,
+    /// The options that change how columns show their values. With BSD's
+    /// `n`, user IDs and wait channels are numbers, aligned on the right
+    /// (`user_is_number` and `wchan_is_number`). With `--signames`, signal
+    /// masks show the names of their signals.
+    modifiers: Modifiers,
     /// The width of a line, a multiple of the screen's width
     /// (`active_cols`).
     active_cols: u32,
     /// Whether a line has room for signal masks of 16 digits.
     wide_signals: bool,
     delimiter: Option<u8>,
-    /// BSD's `n`: user IDs and wait channels are numbers, aligned on the
-    /// right (`user_is_number` and `wchan_is_number`).
-    numeric: bool,
     /// The rows until the next header (`lines_to_next_header`). A header is
     /// printed when the count reaches 0.
     lines_to_next_header: i64,
@@ -98,14 +113,21 @@ impl<'c> Layout<'c> {
             }
         }
 
-        let (active_cols, wide_signals) = check_header_width(columns, settings.screen);
+        let signal_names = settings.modifiers.contains(Modifiers::SIGNAL_NAMES);
+        let columns = if signal_names {
+            Cow::Owned(columns.iter().map(widen_signal_mask).collect())
+        } else {
+            Cow::Borrowed(columns)
+        };
+        let (active_cols, wide_signals) =
+            check_header_width(&columns, settings.screen, signal_names);
 
         Self {
             columns,
+            modifiers: settings.modifiers,
             active_cols,
             wide_signals,
             delimiter: settings.delimiter,
-            numeric: settings.modifiers.contains(Modifiers::NUMERIC),
             lines_to_next_header,
             header_gap,
             did_stuff: false,
@@ -195,8 +217,11 @@ impl<'c> Layout<'c> {
         let width = int(column.width);
         let fill = |columns: i64| (columns - cell.amount).max(0);
 
-        match Alignment::of(column) {
-            Alignment::Specifier(Justification::User | Justification::Wchan) if self.numeric => {
+        let signal_names = self.modifiers.contains(Modifiers::SIGNAL_NAMES);
+        let numeric = self.modifiers.contains(Modifiers::NUMERIC);
+
+        match Alignment::of(column, signal_names) {
+            Alignment::Specifier(Justification::User | Justification::Wchan) if numeric => {
                 (fill(width), 0)
             }
             Alignment::Text | Alignment::Specifier(Justification::Left | Justification::User) => {
@@ -241,8 +266,10 @@ impl<'c> Layout<'c> {
             let _ = stderr.write_all(b"fix bigness error\n");
         }
 
-        for (index, column) in self.columns.iter().enumerate() {
-            let next = self.columns.get(index + 1);
+        let columns = &*self.columns;
+
+        for (index, column) in columns.iter().enumerate() {
+            let next = columns.get(index + 1);
             let (room, tmpspace) = self.room(int(column.width), next.is_none(), position);
             let room = Room {
                 cells: room as usize,
@@ -303,18 +330,33 @@ fn int(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+/// `column` as procps-ng's `check_header_width` changes it for
+/// `--signames`: a signal mask column is at least 27 cells wide.
+fn widen_signal_mask(column: &Column) -> Column {
+    if !column.shows_signal_mask() {
+        return column.clone();
+    }
+
+    Column {
+        width: column.width.max(SIGNAL_NAME_WIDTH),
+        ..column.clone()
+    }
+}
+
 /// The width of a line and whether it has room for wide signal masks, as
 /// procps-ng's `check_header_width` decides them. procps-ng tries the
 /// screen's width and then each multiple of it, and stops at the first
 /// multiple that fits every column or that reaches half of its output
 /// buffer, 65536 columns. A screen that is already wider than that gives a
-/// wider line.
+/// wider line. With `--signames`, a signal mask column is laid out as
+/// `CF_UNLIMITED`, but procps-ng still counts it as a signal mask when it
+/// decides whether the line has room for masks of 16 digits.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "procps-ng keeps the width in an unsigned int"
 )]
-fn check_header_width(columns: &[Column], screen: Screen) -> (u32, bool) {
+fn check_header_width(columns: &[Column], screen: Screen, signal_names: bool) -> (u32, bool) {
     let mut total: i64 = 0;
     let mut was_normal = 0;
     let mut signals = 0;
@@ -323,18 +365,19 @@ fn check_header_width(columns: &[Column], screen: Screen) -> (u32, bool) {
         let width = int(column.width);
         let last = index + 1 == columns.len();
 
-        match Alignment::of(column) {
-            Alignment::Text => {
-                total += width;
-                was_normal = 0;
-                continue;
-            }
-            Alignment::Specifier(Justification::Signal) => signals += 1,
-            Alignment::Specifier(_) => {}
+        let alignment = Alignment::of(column, signal_names);
+
+        if alignment == Alignment::Text {
+            total += width;
+            was_normal = 0;
+            continue;
         }
 
-        total += if Alignment::of(column) == Alignment::Specifier(Justification::Unlimited) && last
-        {
+        if column.shows_signal_mask() {
+            signals += 1;
+        }
+
+        total += if alignment == Alignment::Specifier(Justification::Unlimited) && last {
             3
         } else {
             width
@@ -363,7 +406,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    use super::{Layout, Position, Settings, check_header_width};
+    use super::{Layout, Position, Settings, check_header_width, widen_signal_mask};
     use crate::ps::{
         format::{Column, Content},
         options::{Header, Modifiers, Screen},
@@ -609,6 +652,41 @@ mod tests {
         assert_eq!(stdout, expected);
     }
 
+    // With `--signames`, procps-ng still adds 7 cells for each signal mask
+    // column when it decides whether masks of 16 digits fit: 27 + 1 + 3 + 7
+    // cells do not fit in 31.
+    #[test]
+    fn signal_names_still_count_the_mask_columns() {
+        let columns = [widen_signal_mask(&column("caught")), column("comm")];
+        let screen = Screen {
+            columns: 31,
+            rows: 24,
+        };
+
+        assert_eq!(check_header_width(&columns, screen, true), (31, false));
+    }
+
+    // For `--signames`, procps-ng's `check_header_width` makes a signal mask
+    // column at least 27 cells wide and lays it out as `CF_UNLIMITED`, on the
+    // left.
+    #[test]
+    fn signal_names_take_a_wide_column_on_the_left() {
+        let settings = Settings {
+            modifiers: Modifiers::SIGNAL_NAMES,
+            ..settings(Header::Single, 131_072)
+        };
+        let (stdout, _, _) = laid_out(
+            &[column("caught"), column("pid")],
+            settings,
+            &[&[("caught", "HUP,TERM"), ("pid", "10")]],
+        );
+
+        assert_eq!(
+            stdout,
+            "CAUGHT                        PID\nHUP,TERM                       10\n"
+        );
+    }
+
     #[test]
     fn a_line_wider_than_the_output_buffer_is_reported() {
         let (stdout, stderr, _) = laid_out(
@@ -684,7 +762,7 @@ mod tests {
             rows: 24,
         };
 
-        assert_eq!(check_header_width(&columns, screen), expected);
+        assert_eq!(check_header_width(&columns, screen, false), expected);
     }
 
     #[test]

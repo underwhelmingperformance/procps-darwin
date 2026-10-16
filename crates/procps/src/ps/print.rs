@@ -971,8 +971,8 @@ impl Printer {
 
                 time.format(format, COLWID).unwrap_or_default()
             }),
-            Self::Sigcatch => signal_cell(&signal_mask(info.caught_signals.bits()), room),
-            Self::Sigignore => signal_cell(&signal_mask(info.ignored_signals.bits()), room),
+            Self::Sigcatch => mask_cell(context, info.caught_signals.bits(), room),
+            Self::Sigignore => mask_cell(context, info.ignored_signals.bits(), room),
             Self::Euid | Self::Fuid => Cell::text(signed(credentials.euid.as_raw()).to_string()),
             Self::Ruid => Cell::text(signed(credentials.ruid.as_raw()).to_string()),
             Self::Suid => Cell::text(signed(credentials.svuid.as_raw()).to_string()),
@@ -1405,6 +1405,62 @@ fn start_cell(
     (context.calendar)(start).map_or_else(Cell::default, |time| {
         Cell::text(format(context, start, time))
     })
+}
+
+/// Darwin's signals, from 1 to `NSIG` minus 1, which is 31.
+const DARWIN_SIGNALS: std::ops::RangeInclusive<libc::c_int> = 1..=31;
+
+/// The signal mask `bits`, as procps-ng's `help_pr_sig` prints it: with
+/// `--signames`, as the names of its signals, and otherwise as a number.
+fn mask_cell(context: &Context<'_>, bits: u32, room: Room) -> Cell {
+    if context.modifiers.contains(Modifiers::SIGNAL_NAMES)
+        && let Some(names) = signal_names(bits, room.cells)
+    {
+        return Cell::text(names);
+    }
+
+    signal_cell(&signal_mask(bits), room)
+}
+
+/// The names of the signals in the mask `bits`, separated by commas, as
+/// procps-ng's `procps_sigmask_names` writes them into a buffer of `size`
+/// bytes, or `None` for an empty buffer, which procps-ng refuses. A name
+/// that does not fit, with its comma and the terminating NUL, ends the list
+/// with `+`. A mask without signals is `-`. Bit `n - 1` is Darwin's signal
+/// `n`, so the names are in the order of Darwin's numbers. They are the names
+/// that `pkill` accepts, without `SIG`.
+fn signal_names(bits: u32, size: usize) -> Option<Vec<u8>> {
+    if size == 0 {
+        return None;
+    }
+
+    let mut names = Vec::new();
+    let mut left = size;
+
+    for number in DARWIN_SIGNALS.filter(|number| bits & (1 << (number - 1)) != 0) {
+        let name = crate::signal::name(number)
+            .map_or_else(|| format!("INVALID_{number:02}"), str::to_owned);
+
+        if name.len() + 1 >= left {
+            names.push(b'+');
+            break;
+        }
+
+        let text = if names.is_empty() {
+            name
+        } else {
+            format!(",{name}")
+        };
+
+        left -= text.len();
+        names.extend(text.into_bytes());
+    }
+
+    if names.is_empty() {
+        names.push(b'-');
+    }
+
+    Some(names)
 }
 
 /// A signal mask, as procps-ng's `help_pr_sig` prints it: with all 16 digits
@@ -2635,6 +2691,42 @@ pub(crate) mod tests {
                 .print(&mut context, &snapshot.processes[0].linux_task(), room),
             Cell::text(expected)
         );
+    }
+
+    // procps-ng lists the names in the order of the signals' numbers, and
+    // ends the list with `+` when the next name and a comma do not fit.
+    #[rstest]
+    #[case::names(0x4001, 1_000, "HUP,TERM")]
+    #[case::darwin_numbers((1 << 22) | (1 << 28) | (1 << 29), 1_000, "POLL,INFO,USR1")]
+    #[case::none(0, 1_000, "-")]
+    #[case::cut(0x4001, 6, "HUP+")]
+    #[case::first_name_without_room(0x4001, 4, "+")]
+    #[case::last_signal(1 << 30, 1_000, "USR2")]
+    #[case::no_room(0x4001, 0, "0000000000004001")]
+    fn signal_names_replace_the_mask(
+        #[case] mask: u32,
+        #[case] cells: usize,
+        #[case] expected: &str,
+    ) {
+        let mut process = sleeper();
+        process.info.caught_signals = SignalSet::from(mask);
+
+        let cell = printed("caught", process, cells, settings(Modifiers::SIGNAL_NAMES));
+
+        assert_eq!(String::from_utf8(cell.bytes), Ok(expected.to_owned()));
+    }
+
+    // Darwin's `kinfo_proc` reports no pending or blocked signals.
+    #[test]
+    fn signal_names_of_an_unknown_mask_are_a_dash() {
+        let cell = printed(
+            "pending",
+            sleeper(),
+            1_000,
+            settings(Modifiers::SIGNAL_NAMES),
+        );
+
+        assert_eq!(cell, Cell::text(*b"-"));
     }
 
     #[rstest]

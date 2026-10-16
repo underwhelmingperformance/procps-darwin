@@ -445,6 +445,15 @@ shows `SIGCONT`, whereas Linux shows it for a process that ignores it.
 `kinfo_proc` reports 0 for every pending and blocked signal, so `pending`,
 `blocked` and the other masks of pending and blocked signals show `-`.
 
+With `--signames`, `caught` and `ignored` show the names of the signals in the
+mask, separated by commas, in place of the number. procps-ng takes the names
+from glibc's `sigabbrev_np` and lists them in ascending order of Linux's
+numbers. The tools take the names from the table that `pkill` reads, which gives
+glibc's name for each signal that both systems have, such as `POLL` for `SIGIO`,
+and `EMT` and `INFO` for the signals that only Darwin has. They list the names
+in ascending order of Darwin's numbers, so a mask with `SIGUSR1` and `SIGSEGV`
+shows `SEGV,USR1` on macOS and `USR1,SEGV` on Linux.
+
 ## Terminal names
 
 `ps`'s `tty`, `tt` and `tname` columns show the name of the controlling terminal

@@ -17,9 +17,9 @@ use procps_core::{
 };
 
 use crate::ps::{
-    error::{PsError, Unimplemented},
+    error::{InternalError, PsError},
     forest::{self, Branch},
-    format::{Content, Order},
+    format::{Column, Content, Order},
     layout::{self, Layout},
     names::Names,
     options::{Modifiers, Options, ThreadFlags},
@@ -45,20 +45,6 @@ pub(crate) struct Invocation {
     pub(crate) page_size: u64,
     /// Breaks a time down in the time zone that the start columns use.
     pub(crate) calendar: fn(i64) -> Option<CalendarTime>,
-}
-
-/// The first part of `options` that this project does not implement yet.
-fn unimplemented(options: &Options) -> Option<Unimplemented> {
-    let modifiers = [(Modifiers::SIGNAL_NAMES, "--signames")];
-
-    if let Some(&(_, option)) = modifiers
-        .iter()
-        .find(|(modifier, _)| options.modifiers.contains(*modifier))
-    {
-        return Some(Unimplemented::Option(option));
-    }
-
-    None
 }
 
 /// The rows of a listing, as procps-ng's `simple_spew` and `fancy_spew`
@@ -411,8 +397,10 @@ fn select<'a>(
 ///
 /// # Errors
 ///
-/// Returns an error if `options` need something that this project does not
-/// implement yet, or if `source` cannot take a snapshot.
+/// Returns an error if `source` cannot take a snapshot, or if `ps` sorts the
+/// processes or shows a process tree and the snapshot has no processes. With
+/// `--signames`, `m` or `-m` and a signal mask column, it returns the bug
+/// that procps-ng reports, before it takes a snapshot.
 pub(crate) fn list(
     options: &Options,
     invocation: &Invocation,
@@ -421,8 +409,11 @@ pub(crate) fn list(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> Result<bool, PsError> {
-    if let Some(unimplemented) = unimplemented(options) {
-        return Err(PsError::Unimplemented(unimplemented));
+    if options.threads.contains(ThreadFlags::SHOW_BOTH)
+        && options.modifiers.contains(Modifiers::SIGNAL_NAMES)
+        && options.columns.iter().any(Column::shows_signal_mask)
+    {
+        return Err(InternalError::SignalNamesWithThreadRows.into());
     }
 
     // procps-ng's `fancy_spew` sorts and shows process trees.
@@ -522,7 +513,7 @@ mod tests {
 
     use super::{Invocation, Rows, data_request, list, read, select};
     use crate::ps::{
-        error::{PsError, Unimplemented},
+        error::{InternalError, PsError},
         options::{Command, Modifiers, Options},
         parser,
         print::tests::{TAKEN, UPTIME, resources, snapshot, system, task},
@@ -1152,16 +1143,39 @@ mod tests {
         );
     }
 
+    // procps-ng's `check_header_width` removes the flags of a signal mask
+    // column for `--signames`, and `lists_and_needs` needs them for `m`.
     #[rstest]
-    #[case::signal_names(&["--signames"], Unimplemented::Option("--signames"))]
-    fn a_part_that_is_not_implemented_yet_is_an_error(
-        #[case] line: &[&str],
-        #[case] expected: Unimplemented,
-    ) {
+    #[case::bsd(&["m", "--signames", "-o", "pid,caught"])]
+    #[case::unix(&["-m", "--signames", "s"])]
+    fn signal_names_with_rows_of_threads_are_a_bug(#[case] line: &[&str]) {
         assert_matches!(
             listed(line),
-            (stdout, _, Err(PsError::Unimplemented(unimplemented)))
-                if stdout.is_empty() && unimplemented == expected
+            (stdout, _, Err(PsError::Internal(InternalError::SignalNamesWithThreadRows)))
+                if stdout.is_empty()
+        );
+    }
+
+    // procps-ng lists the rows when no column shows a signal mask, and when
+    // the rows are not processes followed by their threads.
+    #[rstest]
+    #[case::no_mask_column(
+        &["m", "--signames", "-o", "pid,comm", "-p", "400"],
+        "  PID COMMAND\n  400 worker\n    - -\n    - -\n    - -\n"
+    )]
+    #[case::thread_rows(
+        &["-L", "--signames", "-o", "pid,caught", "-p", "400"],
+        "  PID CAUGHT\n  400 -\n  400 -\n  400 -\n"
+    )]
+    fn signal_names_are_no_bug_without_both_conditions(
+        #[case] line: &[&str],
+        #[case] expected: &str,
+    ) {
+        let (stdout, stderr, result) = listed_from(line, threaded_fixtures());
+
+        assert_eq!(
+            (stdout.as_str(), stderr.as_str(), result.ok()),
+            (expected, "", Some(true))
         );
     }
 

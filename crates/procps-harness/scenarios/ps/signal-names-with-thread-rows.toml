@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--signames with m and a signal mask column makes procps-ng report a bug"
+command = ["ps", "m", "--signames", "-o", "pid,caught", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+catch = ["SIGHUP", "SIGTERM"]

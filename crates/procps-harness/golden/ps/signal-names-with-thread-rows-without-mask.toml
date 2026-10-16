@@ -1,0 +1,12 @@
+status = 0
+stdout = """
+  PID COMMAND
+{a1} harness-alpha
+    - -
+    - -
+    - -
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
