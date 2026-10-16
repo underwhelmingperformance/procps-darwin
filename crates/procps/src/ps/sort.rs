@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// A value of procps-ng's process library that `ps` sorts by (`PIDS_*`),
-/// named after it.
+/// named after it, or the value of a Darwin column.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Item {
     AddrCodeEnd,
@@ -30,6 +30,7 @@ pub(crate) enum Item {
     AddrCurrEip,
     AddrCurrEsp,
     AddrStackStart,
+    Architecture,
     AutogrpId,
     AutogrpNice,
     CapsPermitted,
@@ -37,11 +38,15 @@ pub(crate) enum Item {
     Cgroup,
     Cmd,
     Cmdline,
+    ContextSwitches,
+    Cycles,
     DockerId,
+    Energy,
     Exe,
     Flags,
     FltMaj,
     FltMin,
+    Footprint,
     IdEgid,
     IdEgroup,
     IdEuid,
@@ -65,6 +70,7 @@ pub(crate) enum Item {
     IdSuser,
     IdTgid,
     IdTpgid,
+    Instructions,
     IoReadBytes,
     IoReadChars,
     IoReadOps,
@@ -73,6 +79,7 @@ pub(crate) enum Item {
     IoWriteChars,
     IoWriteOps,
     Lxcname,
+    MaxFootprint,
     MemResPgs,
     MemShrPgs,
     Nice,
@@ -132,6 +139,7 @@ pub(crate) enum Item {
     VmStack,
     VsizeBytes,
     WchanName,
+    Wired,
 }
 
 /// A value to sort by, with procps-ng's comparison for its type.
@@ -203,7 +211,14 @@ impl Item {
             | Self::VmRss
             | Self::VmRssLocked
             | Self::VmSize
-            | Self::VsizeBytes => &[Usage],
+            | Self::VsizeBytes
+            | Self::ContextSwitches
+            | Self::Cycles
+            | Self::Energy
+            | Self::Footprint
+            | Self::Instructions
+            | Self::MaxFootprint
+            | Self::Wired => &[Usage],
             _ => &[],
         }
     }
@@ -227,6 +242,24 @@ impl Item {
             // 0, so the unknown starts sort after the zeros, as on Linux.
             Self::AddrStackStart => {
                 Value::Unsigned(print::stack_start(context, process).unwrap_or(u64::MAX))
+            }
+            Self::Architecture => Value::Text(print::architecture(process).to_vec()),
+            Self::ContextSwitches => {
+                unsigned(print::task_info(process).map(|task| task.context_switches.into()))
+            }
+            Self::Cycles => unsigned(print::counters(process).map(|counters| counters.cycles)),
+            Self::Energy => unsigned(print::energy_millijoules(process)),
+            Self::Footprint => unsigned(
+                print::resources(process).map(|resources| resources.physical_footprint >> 10),
+            ),
+            Self::Instructions => {
+                unsigned(print::counters(process).map(|counters| counters.instructions))
+            }
+            Self::MaxFootprint => unsigned(
+                print::resources(process).map(|resources| resources.peak_physical_footprint >> 10),
+            ),
+            Self::Wired => {
+                unsigned(print::resources(process).map(|resources| resources.wired_size >> 10))
             }
             Self::IoReadBytes => {
                 unsigned(print::counters(process).map(|counters| counters.disk_bytes_read))
@@ -422,8 +455,8 @@ mod tests {
     };
 
     use darwin_proc::{
-        Gid, Pid, Protection, Region, ResourceCounters, ResourceUsage, RunState, ShareMode, Status,
-        TaskInfo, Terminal, Uid,
+        Gid, Pid, ProcessFlags, Protection, Region, ResourceCounters, ResourceUsage, RunState,
+        ShareMode, Status, TaskInfo, Terminal, Uid,
     };
     use pretty_assertions::assert_eq;
     use procps_core::{
@@ -826,6 +859,73 @@ mod tests {
             sorted(three_private(), key(name, Order::Ascending)),
             expected
         );
+    }
+
+    /// A process with `pid` whose footprints, wired size, context switches,
+    /// and instruction, cycle and energy counters grow with `scale`. The
+    /// process runs under Rosetta if `translated` is true.
+    fn darwin(pid: i32, scale: u64, translated: bool) -> Process {
+        let mut process = fixture(
+            pid,
+            "same",
+            100,
+            Duration::ZERO,
+            RunState::Waiting,
+            "a",
+            None,
+        );
+
+        if translated {
+            process.info.flags = ProcessFlags::from(0x2_0000);
+        }
+
+        process.usage = Some(Usage {
+            task: Field::Available(TaskInfo {
+                context_switches: u32::try_from(scale).expect("a small scale"),
+                ..task()
+            }),
+            resources: Field::Available(ResourceUsage {
+                physical_footprint: scale << 20,
+                peak_physical_footprint: scale << 21,
+                wired_size: scale << 10,
+                ..resources()
+            }),
+            counters: Field::Available(ResourceCounters {
+                disk_bytes_read: 0,
+                disk_bytes_written: 0,
+                logical_writes: 0,
+                instructions: scale * 1_000,
+                cycles: scale * 2_000,
+                energy_nanojoules: scale * 1_000_000,
+            }),
+        });
+
+        process
+    }
+
+    #[rstest]
+    #[case::footprint("footprint")]
+    #[case::peak_footprint("maxfootprint")]
+    #[case::wired("wired")]
+    #[case::context_switches("csw")]
+    #[case::instructions("instrs")]
+    #[case::cycles("cycles")]
+    #[case::energy("energy")]
+    fn a_darwin_column_sorts_by_its_value(#[case] name: &str) {
+        let processes = vec![
+            darwin(10, 2, false),
+            darwin(20, 3, false),
+            darwin(30, 1, false),
+        ];
+
+        assert_eq!(sorted(processes, key(name, Order::Ascending)), [30, 10, 20]);
+    }
+
+    #[test]
+    fn the_architecture_sorts_by_its_name() {
+        let processes = vec![darwin(10, 1, true), darwin(20, 1, false)];
+
+        assert_eq!(sorted(processes, key("arch", Order::Ascending)), [20, 10]);
     }
 
     // procps-ng multiplies the ticks by 100 as a `float`, which rounds

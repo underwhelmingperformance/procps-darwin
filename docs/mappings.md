@@ -308,6 +308,32 @@ writes, its read and write calls, or its cancelled writes, so `rchars`,
 `/proc/<pid>/stat`. macOS has the limit, but no call reads another process's
 limits, so `lim` shows `-`.
 
+## Darwin columns
+
+`ps` adds columns for Darwin values that procps-ng's specifiers do not show.
+Their names are neither procps-ng's specifiers nor keywords of Apple's `ps`, and
+`ps L` lists them after procps-ng's specifiers.
+
+| Column         | Value                                          | Darwin source                              |
+| -------------- | ---------------------------------------------- | ------------------------------------------ |
+| `arch`         | `x86_64` under Rosetta, and `arm64` otherwise  | `P_TRANSLATED` in `kinfo_proc`'s `p_flag`  |
+| `csw`          | context switches                               | `pti_csw` from `PROC_PIDTASKINFO`          |
+| `cycles`       | CPU cycles                                     | `ri_cycles` from `proc_pid_rusage`         |
+| `energy`       | energy used, in millijoules                    | `ri_energy_nj` from `proc_pid_rusage`      |
+| `footprint`    | physical footprint, in KiB                     | `ri_phys_footprint` from `proc_pid_rusage` |
+| `instrs`       | instructions retired                           | `ri_instructions` from `proc_pid_rusage`   |
+| `maxfootprint` | largest physical footprint since start, in KiB | `ri_lifetime_max_phys_footprint`           |
+| `wired`        | wired memory, in KiB                           | `ri_wired_size` from `proc_pid_rusage`     |
+
+The physical footprint is the memory that Activity Monitor shows for a process.
+Apple silicon runs no instruction set other than arm64 and, under Rosetta,
+x86_64, so `arch` does not tell arm64e, the variant that Apple's own programs
+use, from arm64. Every user can read `arch`. The helper sends the context
+switches, the footprints and the wired size to every user, and the cycle,
+instruction and energy counters only to the owner and to root, in the same way
+as the disk I/O counts. The kernel reports 0 instructions and cycles where it
+cannot read the CPU's performance counters, as in a virtual machine.
+
 ## CPU time of reaped children
 
 Linux reports the CPU time of the children that a process has waited for as

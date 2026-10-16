@@ -15,7 +15,7 @@ use std::{
     os::unix::ffi::OsStrExt,
 };
 
-use darwin_proc::{CalendarTime, ResourceCounters, Status, TaskInfo};
+use darwin_proc::{CalendarTime, ResourceCounters, ResourceUsage, Status, TaskInfo};
 use procps_core::{
     Charset, Field, FieldGroup, LinuxPolicy, LinuxPriority, LinuxTask, Process, Snapshot,
     helper::Caller,
@@ -36,11 +36,12 @@ const COLWID: usize = 240;
 const DEFAULT_LSTART_FORMAT: &CStr = c"%a %b %e %H:%M:%S %Y";
 
 /// The function that procps-ng calls to print a column's value (`pr_*`),
-/// named after it.
+/// named after it, or the printer of a Darwin column.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Printer {
     Agid,
     Agnice,
+    Architecture,
     Args,
     Bsdstart,
     Bsdtime,
@@ -51,13 +52,16 @@ pub(crate) enum Printer {
     Class,
     Comm,
     Context,
+    ContextSwitches,
     Cp,
+    Cycles,
     Docker,
     Drs,
     Dsiz,
     Egid,
     Egroup,
     Eip,
+    Energy,
     Environ,
     Esp,
     Etime,
@@ -70,16 +74,19 @@ pub(crate) enum Printer {
     Fgroup,
     Flag,
     Fname,
+    Footprint,
     Fuid,
     Fuser,
     Hugetblprv,
     Hugetblshr,
+    Instructions,
     Ipcns,
     Lim,
     Lstart,
     Luid,
     Lxcname,
     Majflt,
+    MaxFootprint,
     Minflt,
     Mntns,
     Netns,
@@ -169,6 +176,7 @@ pub(crate) enum Printer {
     Wcbytes,
     Wchan,
     Wchars,
+    Wired,
     Wops,
 }
 
@@ -629,7 +637,14 @@ impl Printer {
             | Self::Utilization
             | Self::UtilizationC
             | Self::Vsz
-            | Self::Wbytes => &[Usage],
+            | Self::Wbytes
+            | Self::ContextSwitches
+            | Self::Cycles
+            | Self::Energy
+            | Self::Footprint
+            | Self::Instructions
+            | Self::MaxFootprint
+            | Self::Wired => &[Usage],
             Self::Drs | Self::Dsiz | Self::Trs | Self::Tsiz | Self::Uss => &[Usage, Regions],
             Self::Swapable => &[Regions],
             _ => &[],
@@ -759,6 +774,24 @@ impl Printer {
             Self::Fds => number_cell(open_files(process)),
             Self::Esp | Self::Eip => Cell::text(address(Some(0))),
             Self::Stackp => Cell::text(address(stack_start(context, process))),
+            Self::Footprint => {
+                number_cell(resources(process).map(|resources| resources.physical_footprint >> 10))
+            }
+            Self::MaxFootprint => number_cell(
+                resources(process).map(|resources| resources.peak_physical_footprint >> 10),
+            ),
+            Self::Wired => {
+                number_cell(resources(process).map(|resources| resources.wired_size >> 10))
+            }
+            Self::ContextSwitches => {
+                number_cell(task_info(process).map(|task| task.context_switches))
+            }
+            Self::Instructions => {
+                number_cell(counters(process).map(|counters| counters.instructions))
+            }
+            Self::Cycles => number_cell(counters(process).map(|counters| counters.cycles)),
+            Self::Energy => number_cell(energy_millijoules(process)),
+            Self::Architecture => Cell::text(architecture(process)),
             Self::Exe => {
                 let executable = executable(context, process);
 
@@ -1048,6 +1081,27 @@ fn number_cell(number: Option<impl ToString>) -> Cell {
     number.map_or_else(Cell::dash, |number| Cell::text(number.to_string()))
 }
 
+/// The resource usage of `process`, if the source read it.
+pub(crate) fn resources(process: &Process) -> Option<&ResourceUsage> {
+    process.usage.as_ref()?.resources.available()
+}
+
+/// The energy that `process` has used, in millijoules.
+pub(crate) fn energy_millijoules(process: &Process) -> Option<u64> {
+    counters(process).map(|counters| counters.energy_nanojoules / 1_000_000)
+}
+
+/// The instruction set of `process`: `x86_64` for a process that runs under
+/// Rosetta, and `arm64` otherwise. Apple silicon runs no other instruction
+/// set.
+pub(crate) const fn architecture(process: &Process) -> &'static [u8] {
+    if process.info.flags.is_translated() {
+        b"x86_64"
+    } else {
+        b"arm64"
+    }
+}
+
 /// The disk I/O, instruction, cycle and energy counters of `process`, if the
 /// source read them.
 pub(crate) fn counters(process: &Process) -> Option<&ResourceCounters> {
@@ -1311,9 +1365,9 @@ pub(crate) mod tests {
     };
 
     use darwin_proc::{
-        AccountingFlags, CalendarTime, Gid, LoadAverage, Memory, Pid, Protection, Region,
-        ResourceCounters, ResourceUsage, RunState, SchedulingPolicy, ShareMode, SignalSet, Status,
-        Swap, TaskInfo, TaskTotals, Terminal, Uid,
+        AccountingFlags, CalendarTime, Gid, LoadAverage, Memory, Pid, ProcessFlags, Protection,
+        Region, ResourceCounters, ResourceUsage, RunState, SchedulingPolicy, ShareMode, SignalSet,
+        Status, Swap, TaskInfo, TaskTotals, Terminal, Uid,
     };
     use pretty_assertions::assert_eq;
     use procps_core::{
@@ -2052,6 +2106,80 @@ pub(crate) mod tests {
         process.info.start_time = SystemTime::UNIX_EPOCH + Duration::from_secs(TAKEN);
 
         assert_eq!(text("cuc", process), "0.000");
+    }
+
+    /// [`sleeper`] with the values that the Darwin columns show.
+    fn with_darwin_values() -> Process {
+        let mut process = sleeper();
+
+        process.usage = Some(Usage {
+            task: Field::Available(TaskInfo {
+                context_switches: 42,
+                ..task()
+            }),
+            resources: Field::Available(ResourceUsage {
+                physical_footprint: 3 << 20,
+                peak_physical_footprint: 5 << 20,
+                wired_size: 64 << 10,
+                ..resources()
+            }),
+            counters: Field::Available(ResourceCounters {
+                disk_bytes_read: 0,
+                disk_bytes_written: 0,
+                logical_writes: 0,
+                instructions: 1_000,
+                cycles: 2_000,
+                energy_nanojoules: 5_000_000_000,
+            }),
+        });
+
+        process
+    }
+
+    #[rstest]
+    #[case::footprint("footprint", "3072")]
+    #[case::peak_footprint("maxfootprint", "5120")]
+    #[case::wired("wired", "64")]
+    #[case::context_switches("csw", "42")]
+    #[case::instructions("instrs", "1000")]
+    #[case::cycles("cycles", "2000")]
+    #[case::energy("energy", "5000")]
+    #[case::architecture("arch", "arm64")]
+    fn a_darwin_column_shows_its_value(#[case] name: &str, #[case] expected: &str) {
+        assert_eq!(text(name, with_darwin_values()), expected);
+    }
+
+    #[test]
+    fn a_process_under_rosetta_is_x86_64() {
+        let mut process = sleeper();
+        process.info.flags = ProcessFlags::from(0x2_0000);
+
+        assert_eq!(text("arch", process), "x86_64");
+    }
+
+    #[test]
+    fn a_darwin_value_that_the_source_could_not_read_is_a_dash() {
+        let mut process = sleeper();
+        process.usage = Some(Usage {
+            task: Field::Denied,
+            resources: Field::Denied,
+            counters: Field::Denied,
+        });
+
+        let printed: Vec<String> = [
+            "footprint",
+            "maxfootprint",
+            "wired",
+            "csw",
+            "instrs",
+            "cycles",
+            "energy",
+        ]
+        .iter()
+        .map(|name| text(name, process.clone()))
+        .collect();
+
+        assert_eq!(printed, ["-", "-", "-", "-", "-", "-", "-"]);
     }
 
     #[rstest]

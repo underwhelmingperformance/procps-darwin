@@ -5,10 +5,14 @@
 //! Runs the procps-ng reference scenarios against this package's binaries and
 //! compares each result with the golden file that procps-ng produced.
 //!
-//! Each scenario is a separate test. A scenario marked `pending` is for a tool
-//! that does not yet behave as procps-ng does. Its test passes while the result
-//! differs, and fails once the result matches, so that the mark is removed
-//! when the tool is ready.
+//! Each scenario is a separate test. The expected result is the contents of
+//! the golden file. `ADDITIONS` lists the lines that this port appends to
+//! procps-ng's standard output in some scenarios, and the test appends them to
+//! the expected result.
+//!
+//! A scenario marked `pending` is for a tool that does not yet behave as
+//! procps-ng does. Its test passes while the result differs, and fails once
+//! the result matches, so that the mark is removed when the tool is ready.
 
 use std::{io::Write, path::Path, process::ExitCode, sync::Arc};
 
@@ -68,8 +72,33 @@ fn trials() -> Result<Vec<Trial>, ReferenceError> {
     Ok(trials)
 }
 
+/// The lines that this port adds to procps-ng's standard output, by tool and
+/// scenario. `ps L` lists the Darwin columns after procps-ng's specifiers.
+const ADDITIONS: [(&str, &str, &str); 1] = [(
+    "ps",
+    "list-specifiers",
+    concat!(
+        "arch         ARCH    \n",
+        "csw          CSW     \n",
+        "cycles       CYCLES  \n",
+        "energy       ENERGY  \n",
+        "footprint    FOOTPRIN\n",
+        "instrs       INSTRS  \n",
+        "maxfootprint MAXFOOTP\n",
+        "wired        WIRED   \n",
+    ),
+)];
+
 fn compare(runner: &Runner, file: &ScenarioFile, golden: &Path) -> Result<(), Failed> {
-    let expected = Outcome::read(golden)?;
+    let mut expected = Outcome::read(golden)?;
+
+    for (_, _, lines) in ADDITIONS
+        .iter()
+        .filter(|(tool, name, _)| *tool == file.tool && *name == file.name)
+    {
+        expected.stdout.push_str(lines);
+    }
+
     let actual = runner.run(&file.scenario)?;
 
     match (file.scenario.is_pending(), expected == actual) {

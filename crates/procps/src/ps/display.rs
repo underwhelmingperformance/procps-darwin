@@ -719,6 +719,21 @@ mod tests {
     #[case::sort_by_cpu_use_with_children(&["-o", "pid", "--sort", "cuc"], usage())]
     #[case::sort_by_resident_pages(&["-o", "pid", "--sort", "resident"], usage())]
     #[case::sort_by_wired(&["-o", "pid", "--sort", "vm_lock"], usage())]
+    #[case::darwin_footprint(&["-o", "footprint"], usage())]
+    #[case::sort_by_darwin_footprint(&["-o", "pid", "--sort", "footprint"], usage())]
+    #[case::darwin_max_footprint(&["-o", "maxfootprint"], usage())]
+    #[case::sort_by_darwin_max_footprint(&["-o", "pid", "--sort", "maxfootprint"], usage())]
+    #[case::darwin_wired(&["-o", "wired"], usage())]
+    #[case::sort_by_darwin_wired(&["-o", "pid", "--sort", "wired"], usage())]
+    #[case::darwin_context_switches(&["-o", "csw"], usage())]
+    #[case::sort_by_darwin_context_switches(&["-o", "pid", "--sort", "csw"], usage())]
+    #[case::darwin_instructions(&["-o", "instrs"], usage())]
+    #[case::sort_by_darwin_instructions(&["-o", "pid", "--sort", "instrs"], usage())]
+    #[case::darwin_cycles(&["-o", "cycles"], usage())]
+    #[case::sort_by_darwin_cycles(&["-o", "pid", "--sort", "cycles"], usage())]
+    #[case::darwin_energy(&["-o", "energy"], usage())]
+    #[case::sort_by_darwin_energy(&["-o", "pid", "--sort", "energy"], usage())]
+    #[case::darwin_architecture(&["-o", "arch", "--sort", "arch"], SnapshotRequest::default())]
     fn the_request_asks_only_for_what_the_options_need(
         #[case] line: &[&str],
         #[case] expected: SnapshotRequest,
