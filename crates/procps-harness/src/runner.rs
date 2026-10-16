@@ -5,10 +5,7 @@
 use std::{
     collections::HashSet,
     io::{self, Read, Write},
-    os::unix::{
-        fs::PermissionsExt,
-        process::{CommandExt, ExitStatusExt},
-    },
+    os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
@@ -29,6 +26,7 @@ use crate::{
     Credentials, Error, FixtureEnd, Outcome, Scenario, ScenarioFile,
     fixture::Fixtures,
     pids::skip_low_pids,
+    programs::{Programs, new_directory},
     scenario::toml_files,
     session::{LEADER_ARGUMENT, LEADER_COMM, Report, Request},
     signal,
@@ -251,7 +249,7 @@ const ATTEMPTS: usize = 20;
 #[derive(Clone, Debug)]
 pub struct Runner {
     tools: PathBuf,
-    host: PathBuf,
+    programs: Arc<Programs>,
     credentials: Option<Credentials>,
     timeout: Duration,
     expiry: Option<Expiry>,
@@ -267,8 +265,10 @@ pub struct Generation {
 }
 
 impl Runner {
-    /// A runner for the tools in `tools`. The session leader and fixtures are
-    /// copies of `host`, a binary whose `main` calls [`crate::host`].
+    /// A runner for the tools in `tools`. The session leader and fixtures run
+    /// from copies of `host`, a binary whose `main` calls [`crate::host`]. The
+    /// runner and its clones make one copy for each process name, and their
+    /// runs share the copies.
     ///
     /// ```
     /// use procps_harness::Runner;
@@ -280,7 +280,7 @@ impl Runner {
     pub fn new(tools: impl Into<PathBuf>, host: impl Into<PathBuf>) -> Self {
         Self {
             tools: tools.into(),
-            host: host.into(),
+            programs: Arc::new(Programs::new(host.into())),
             credentials: None,
             timeout: Duration::from_secs(60),
             expiry: None,
@@ -481,19 +481,26 @@ impl Runner {
     }
 
     fn run_with(&self, scenario: &Scenario, decoys: bool) -> Result<Outcome, Error> {
-        let programs = self.programs(scenario)?;
-        let home = programs.path().join("home");
+        let programs = self.programs.prepare(
+            std::iter::once(LEADER_COMM).chain(
+                scenario
+                    .fixtures
+                    .iter()
+                    .map(|fixture| fixture.comm.as_str()),
+            ),
+        )?;
+        let run_directory = self.run_directory()?;
         let decoys = decoys
-            .then(|| Fixtures::start(&scenario.fixtures, programs.path(), self.credentials))
+            .then(|| Fixtures::start(&scenario.fixtures, &programs, self.credentials))
             .transpose()?;
 
         let request = Request {
             tools: self.tools.clone(),
-            programs: programs.path().to_owned(),
-            home,
+            programs: programs.clone(),
+            home: run_directory.path().join("home"),
             scenario: scenario.clone(),
         };
-        let outcome = self.lead(&request, programs.path())?;
+        let outcome = self.lead(&request, &programs)?;
 
         let Some(decoys) = decoys else {
             return Ok(outcome);
@@ -685,50 +692,21 @@ impl Runner {
         })
     }
 
-    /// Creates a directory with the session leader's program, a program for
-    /// each fixture's process name, and an empty home directory for the
-    /// command.
-    fn programs(&self, scenario: &Scenario) -> Result<TempDir, Error> {
-        let directory = tempfile::Builder::new()
-            .prefix("procps-harness-")
-            .tempdir()
-            .map_err(|source| Error::Io {
-                path: std::env::temp_dir(),
-                source,
-            })?;
-        let io_error = |path: &Path| {
-            let path = path.to_owned();
-            move |source| Error::Io { path, source }
+    /// Creates a directory for one run, which contains an empty home directory
+    /// for the command.
+    fn run_directory(&self) -> Result<TempDir, Error> {
+        let directory = new_directory()?;
+        let home = directory.path().join("home");
+        let io_error = |source| Error::Io {
+            path: home.clone(),
+            source,
         };
 
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755))
-            .map_err(io_error(directory.path()))?;
-
-        let names: HashSet<&str> = std::iter::once(LEADER_COMM)
-            .chain(
-                scenario
-                    .fixtures
-                    .iter()
-                    .map(|fixture| fixture.comm.as_str()),
-            )
-            .collect();
-
-        for name in names {
-            let program = directory.path().join(name);
-
-            // Each program must be a copy, not a hard link. Gatekeeper on
-            // macOS finds the path of an executed file from its inode, and
-            // kills the process if that path is a link in another run's
-            // directory that has since been deleted.
-            std::fs::copy(&self.host, &program).map_err(io_error(&program))?;
-        }
-
-        let home = directory.path().join("home");
-        std::fs::create_dir(&home).map_err(io_error(&home))?;
+        std::fs::create_dir(&home).map_err(io_error)?;
 
         if let Some(credentials) = self.credentials {
             std::os::unix::fs::chown(&home, Some(credentials.uid), Some(credentials.gid))
-                .map_err(io_error(&home))?;
+                .map_err(io_error)?;
         }
 
         Ok(directory)

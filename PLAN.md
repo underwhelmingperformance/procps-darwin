@@ -384,6 +384,27 @@ therefore independent, and the tests run them in parallel. When the leader exits
 or stops, or a timeout passes, the runner sends `SIGKILL` to the leader and to
 its process group.
 
+The leader and the fixtures run from copies of the host binary, one for each
+process name. A runner and its clones share the copies, and the copies are
+deleted when the last clone is dropped. macOS assesses an executable file before
+the first process from it starts, and the process waits for the result. The
+unified log suggests that deleting a file during its assessment can crash
+syspolicyd. Before a run first uses a copy, the runner therefore starts the copy
+as a fixture on macOS and waits until it reports that it is ready. After a
+successful preparation, the assessment has ended before any run starts the copy,
+so a run that ends early cannot leave an assessment in progress when the copies
+are deleted, and later runs start the copy without a new assessment. If a
+preparation times out, its assessment can still be in progress when the copies
+are deleted. This preparation happens once for each process name, and a failed
+preparation fails every run that needs the name with the same error.
+
+The runner made a new copy for each run until a run of the flake's `tests` check
+failed. The log showed syspolicyd looking up a deleted copy and crashing less
+than half a second later, and six runs then waited until their limits. The
+copies cannot be hard links to the host: when a hard link to an executable file
+is deleted, macOS can kill a process that is starting from the same file under
+another name.
+
 Output that depends on processes outside the session, such as `ps -e`, bare `ps`
 and the summary area of `top`, cannot be checked this way; it belongs in
 `FixtureSource` tests, or in a later harness feature that keeps only the

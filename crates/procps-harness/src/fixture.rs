@@ -281,11 +281,37 @@ impl Fixtures {
     }
 }
 
-impl Drop for Fixtures {
+/// Starts `program` as a fixture called `name`, with standard input read from
+/// `/dev/null`, waits until it reports that it is ready, and then kills it.
+#[cfg(target_os = "macos")]
+pub(crate) fn run_until_ready(program: &Path, name: &str) -> Result<(), Error> {
+    let name = name.to_owned();
+    let mut child = Command::new(program)
+        .arg(FIXTURE_ARGUMENT)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn_alone()
+        .map_err(|source| Error::Fixture {
+            name: name.clone(),
+            source,
+        })?;
+    let stdout = child.stdout.take().map(BufReader::new);
+    let mut fixture = Fixture {
+        name,
+        child,
+        stdin: None,
+        stdout,
+        reaped: false,
+    };
+
+    fixture.wait_until_ready(READY_LIMIT)
+}
+
+impl Drop for Fixture {
     fn drop(&mut self) {
-        for fixture in &mut self.0 {
-            fixture.kill();
-        }
+        self.kill();
     }
 }
 

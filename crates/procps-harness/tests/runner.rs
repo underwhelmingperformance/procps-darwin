@@ -9,8 +9,8 @@
 
 use std::{
     collections::BTreeMap,
-    io::{BufRead, BufReader},
-    os::unix::fs::PermissionsExt,
+    io::{BufRead, BufReader, Write},
+    os::{fd::OwnedFd, unix::fs::PermissionsExt},
     path::{Path, PathBuf},
     sync::mpsc::{self, RecvTimeoutError},
     time::{Duration, Instant},
@@ -787,13 +787,249 @@ fn no_process_outlives_a_run_whose_command_keeps_forking() -> Result<(), Box<dyn
 /// leader exits or stops without reading it.
 const LARGER_THAN_A_PIPE: usize = 200_000;
 
-/// A runner whose session leader is `script`, a shell script.
-fn runner_with_leader(tools: &Tools, script: &str) -> std::io::Result<Runner> {
+/// A runner whose session leader is `script`, a shell script. A process that
+/// the runner starts as a fixture reports that it is ready and exits.
+fn runner_with_leader(tools: &Tools, script: &str) -> Result<Runner, Box<dyn std::error::Error>> {
+    runner_with_host(tools, "echo ready\nexit\n", script)
+}
+
+/// A runner whose host is a shell script. Each process that runs the script
+/// first appends a line to [`STARTS`], with the path that it runs from and its
+/// first argument. A process that the runner starts as a fixture then runs
+/// `fixture`, and a session leader runs `leader`.
+fn runner_with_host(
+    tools: &Tools,
+    fixture: &str,
+    leader: &str,
+) -> Result<Runner, Box<dyn std::error::Error>> {
     let host = tools.directory.path().join("host");
-    std::fs::write(&host, format!("#!/bin/sh\n{script}"))?;
+    let starts = path_text(&tools.directory.path().join(STARTS))?.to_owned();
+    let script = format!(
+        "#!/bin/sh\necho \"$0 $1\" >>'{starts}'\nif [ \"$1\" = --procps-harness-fixture ]; \
+         then\n{fixture}fi\n{leader}"
+    );
+    std::fs::write(&host, script)?;
     std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(Runner::new(tools.directory.path(), host))
+}
+
+/// The file in the tools directory where [`runner_with_host`]'s script
+/// records each start.
+const STARTS: &str = "starts";
+
+/// The starts that [`runner_with_host`]'s script recorded, each as the path
+/// that it ran from and its first argument.
+fn starts(tools: &Tools) -> std::io::Result<Vec<(String, String)>> {
+    let text = std::fs::read_to_string(tools.directory.path().join(STARTS))?;
+
+    Ok(text
+        .lines()
+        .map(|line| {
+            let (path, argument) = line.rsplit_once(' ').unwrap_or((line, ""));
+            (path.to_owned(), argument.to_owned())
+        })
+        .collect())
+}
+
+#[test]
+fn a_runner_runs_each_program_once_and_keeps_it_until_it_is_dropped()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let runner = runner_with_leader(&tools, "echo gone >&2\nexit 3\n")?;
+    let scenario = scenario(&["fail"], "")?;
+
+    let outcomes = [runner.run(&scenario), runner.run(&scenario)]
+        .map(|outcome| outcome.map_err(|error| error.to_string()));
+    drop(runner);
+    let starts = starts(&tools)?;
+    let program = starts
+        .first()
+        .map(|(path, _)| path.clone())
+        .unwrap_or_default();
+    let start = |argument: &str| (program.clone(), argument.to_owned());
+
+    assert_eq!(
+        (
+            outcomes,
+            starts,
+            Path::new(&program).file_name(),
+            Path::new(&program).exists(),
+        ),
+        (
+            [
+                Err("the session leader failed: exit status: 3: gone".to_owned()),
+                Err("the session leader failed: exit status: 3: gone".to_owned()),
+            ],
+            vec![
+                start("--procps-harness-fixture"),
+                start("--procps-harness-session"),
+                start("--procps-harness-session"),
+            ],
+            Some(std::ffi::OsStr::new("session-leader")),
+            false,
+        )
+    );
+
+    Ok(())
+}
+
+// The host is read-only, as files in the Nix store are. Copying it again over
+// the first copy would fail with EACCES, so a run that prepared the program
+// again would report a different error.
+#[test]
+fn a_failed_preparation_fails_every_run_with_its_error() -> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let runner = runner_with_host(&tools, "echo nope\nexit 1\n", "exit 3\n")?;
+    std::fs::set_permissions(
+        tools.directory.path().join("host"),
+        std::fs::Permissions::from_mode(0o555),
+    )?;
+    let scenario = scenario(&["fail"], "")?;
+
+    let outcomes = [runner.run(&scenario), runner.run(&scenario)]
+        .map(|outcome| outcome.map_err(|error| error.to_string()));
+    let starts = starts(&tools)?;
+    let program = starts
+        .first()
+        .map(|(path, _)| path.clone())
+        .unwrap_or_default();
+    let failure = format!(
+        "cannot prepare {program}: fixture \"session-leader\" wrote \"nope\\n\" and exited with \
+         exit status: 1 before it was ready"
+    );
+
+    assert_eq!(
+        (outcomes, starts),
+        (
+            [Err(failure.clone()), Err(failure)],
+            vec![(program.clone(), "--procps-harness-fixture".to_owned())],
+        )
+    );
+
+    Ok(())
+}
+
+/// A scenario whose one fixture has the process name `comm`.
+fn scenario_with_fixture(comm: &str) -> Result<Scenario, toml::de::Error> {
+    scenario(
+        &["fail"],
+        &format!("[[fixture]]\nname = \"f1\"\ncomm = \"{comm}\"\n"),
+    )
+}
+
+/// The read and write ends of the FIFO at `path`, opened without blocking.
+fn open_fifo(path: &Path) -> rustix::io::Result<(OwnedFd, OwnedFd)> {
+    let reader = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())?;
+    let writer = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+
+    Ok((reader, writer))
+}
+
+// The first run's thread keeps a write end of `waiting` until the run returns,
+// so the test's read returns at end of file if the run fails before the
+// preparation of harness-slow opens the FIFO. The test keeps its read end of
+// `waiting` and both ends of `release` until the end, so the script can open
+// each FIFO without waiting for the test.
+#[test]
+fn programs_are_prepared_in_parallel_and_once_for_each_name()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tools = Tools::new()?;
+    let waiting = tools.directory.path().join("waiting");
+    let release = tools.directory.path().join("release");
+
+    for fifo in [&waiting, &release] {
+        nix::unistd::mkfifo(
+            fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )?;
+    }
+
+    let fixture = format!(
+        "if [ \"${{0##*/}}\" = harness-slow ]; then\necho waiting >'{waiting}'\nread line \
+         <'{release}'\necho \"$line\"\nexit\nfi\necho ready\nexit\n",
+        waiting = path_text(&waiting)?,
+        release = path_text(&release)?,
+    );
+    let runner = runner_with_host(&tools, &fixture, "echo gone >&2\nexit 3\n")?;
+    let (reader, writer) = open_fifo(&waiting)?;
+    let (_release_reader, release_writer) = open_fifo(&release)?;
+
+    let slow = scenario_with_fixture("harness-slow")?;
+    let first = {
+        let (runner, slow) = (runner.clone(), slow.clone());
+        std::thread::spawn(move || {
+            let outcome = runner.run(&slow);
+            drop(writer);
+            outcome
+        })
+    };
+    let mut line = String::new();
+    let mut waiting_reader = BufReader::new(std::fs::File::from(reader));
+    waiting_reader.read_line(&mut line)?;
+    let second = {
+        let runner = runner.clone();
+        std::thread::spawn(move || runner.run(&slow))
+    };
+    let quick = run_or_give_up(runner.clone(), scenario_with_fixture("harness-quick")?)?;
+    let mut release_writer = std::fs::File::from(release_writer);
+    release_writer.write_all(b"nope\n")?;
+    let outcomes = [
+        first.join().map_err(|_| RunPanicked)?,
+        second.join().map_err(|_| RunPanicked)?,
+        quick,
+    ]
+    .map(|outcome| outcome.map_err(|error| error.to_string()));
+
+    let starts = starts(&tools)?;
+    let slow_program = starts
+        .iter()
+        .find(|(path, _)| path.ends_with("/harness-slow"))
+        .map(|(path, _)| path.clone())
+        .unwrap_or_default();
+    let mut names: Vec<_> = starts
+        .iter()
+        .map(|(path, argument)| {
+            let name = Path::new(path).file_name().unwrap_or_default();
+            (name.to_string_lossy().into_owned(), argument.clone())
+        })
+        .collect();
+    names.sort();
+    let failure = format!(
+        "cannot prepare {slow_program}: fixture \"harness-slow\" wrote \"nope\\n\" and exited \
+         with exit status: 0 before it was ready"
+    );
+    let start = |name: &str, argument: &str| (name.to_owned(), argument.to_owned());
+
+    assert_eq!(
+        (line, outcomes, names),
+        (
+            "waiting\n".to_owned(),
+            [
+                Err(failure.clone()),
+                Err(failure),
+                Err("the session leader failed: exit status: 3: gone".to_owned()),
+            ],
+            vec![
+                start("harness-quick", "--procps-harness-fixture"),
+                start("harness-quick", "--procps-harness-fixture"),
+                start("harness-slow", "--procps-harness-fixture"),
+                start("session-leader", "--procps-harness-fixture"),
+                start("session-leader", "--procps-harness-session"),
+            ],
+        )
+    );
+
+    Ok(())
 }
 
 #[test]
