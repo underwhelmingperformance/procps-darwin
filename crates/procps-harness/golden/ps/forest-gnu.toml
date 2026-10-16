@@ -1,0 +1,13 @@
+status = 0
+stdout = '''
+  PID COMMAND
+{session} session-leader
+{a1}  \_ harness-alpha
+{b1}  \_ harness-beta
+{command}  \_ ps
+'''
+stderr = ""
+
+[fixtures]
+a1 = "running"
+b1 = "running"

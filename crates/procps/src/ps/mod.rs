@@ -8,6 +8,7 @@ mod display;
 mod entry;
 mod error;
 mod escape;
+mod forest;
 mod format;
 mod glibc_ctype;
 mod help;

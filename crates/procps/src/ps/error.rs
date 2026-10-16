@@ -356,9 +356,6 @@ impl InternalError {
 /// A part of `ps` that this project does not implement yet.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum Unimplemented {
-    /// A process tree: `-H`, `f` and `--forest` (task 5.5).
-    #[error("the process tree is not implemented yet")]
-    Forest,
     /// An option that changes how columns show their values (task 5.6).
     #[error("the option {0} is not implemented yet")]
     Option(&'static str),
@@ -396,13 +393,14 @@ pub(crate) enum PsError {
         /// directly, as for `-q` or a `-p` on its own. The message then
         /// contains `select`, and otherwise it contains `reap`.
         quick: bool,
-        /// Whether `ps` sorts the processes.
+        /// Whether `ps` sorts the processes, as it does for a process tree.
         sorted: bool,
         /// Why the source could not take the snapshot.
         #[source]
         error: procps_core::SourceError,
     },
-    /// `ps` sorts the processes, and the snapshot has none.
+    /// `ps` sorts the processes or shows a process tree, and the snapshot
+    /// has none.
     #[error("the process table is empty")]
     EmptyProcessTable,
     /// A write to standard output or standard error failed.
