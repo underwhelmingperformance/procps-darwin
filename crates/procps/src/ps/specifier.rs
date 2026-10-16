@@ -416,6 +416,28 @@ static SPECIFIERS: [Specifier; 281] = {
     ]
 };
 
+/// The columns that this port adds for Darwin values that procps-ng's
+/// specifiers do not show, sorted by name in byte order. Under compatibility
+/// rule 5, no name is one of procps-ng's specifiers or a keyword of Apple's
+/// `ps`, and `ps L` shows each name in full, because no name is longer than 12
+/// bytes.
+#[rustfmt::skip]
+static EXTENSIONS: [Specifier; 8] = {
+    use Justification::{Left as LEFT, Right as RIGHT};
+    use Print::ProcessOnly as PO;
+
+    [
+        Specifier::new("arch",         "ARCH",         Printer::Architecture,    Item::Architecture,    6,  PO, LEFT),
+        Specifier::new("csw",          "CSW",          Printer::ContextSwitches, Item::ContextSwitches, 6,  PO, RIGHT),
+        Specifier::new("cycles",       "CYCLES",       Printer::Cycles,          Item::Cycles,          12, PO, RIGHT),
+        Specifier::new("energy",       "ENERGY",       Printer::Energy,          Item::Energy,          8,  PO, RIGHT),
+        Specifier::new("footprint",    "FOOTPRINT",    Printer::Footprint,       Item::Footprint,       9,  PO, RIGHT),
+        Specifier::new("instrs",       "INSTRS",       Printer::Instructions,    Item::Instructions,    12, PO, RIGHT),
+        Specifier::new("maxfootprint", "MAXFOOTPRINT", Printer::MaxFootprint,    Item::MaxFootprint,    12, PO, RIGHT),
+        Specifier::new("wired",        "WIRED",        Printer::Wired,           Item::Wired,           6,  PO, RIGHT),
+    ]
+};
+
 /// The format macros and their expansions, which list specifiers separated by
 /// commas, sorted by the macro's name in byte order.
 static MACROS: [(&str, &str); 49] = [
@@ -602,12 +624,16 @@ static SORT_CODES: [(u8, &str); 25] = [
 ];
 
 /// The specifier with `name`, found as procps-ng's `search_format_array`
-/// finds it.
+/// finds it, or else the Darwin column with `name`.
 pub(crate) fn find(name: &[u8]) -> Option<&'static Specifier> {
-    SPECIFIERS
-        .binary_search_by(|specifier| specifier.name.as_bytes().cmp(name))
-        .ok()
-        .map(|index| &SPECIFIERS[index])
+    [&SPECIFIERS[..], &EXTENSIONS[..]]
+        .into_iter()
+        .find_map(|table| {
+            table
+                .binary_search_by(|specifier| specifier.name.as_bytes().cmp(name))
+                .ok()
+                .map(|index| &table[index])
+        })
 }
 
 /// The expansion of the format macro `name`, which lists specifiers separated
@@ -638,7 +664,8 @@ pub(crate) fn sort_code(code: u8) -> Option<&'static str> {
 /// The lines that `ps L` prints: one for each specifier that procps-ng has a
 /// value for, in order, before `~`, with its name and header cut to 12 and 8
 /// bytes and padded to those widths, as procps-ng's `print_format_specifiers`
-/// prints them.
+/// prints them. The Darwin columns follow, so procps-ng's lines stay as they
+/// are.
 pub(crate) fn listing() -> Vec<Vec<u8>> {
     let field = |text: &str, width: usize| {
         let text = &text.as_bytes()[..text.len().min(width)];
@@ -650,6 +677,7 @@ pub(crate) fn listing() -> Vec<Vec<u8>> {
     SPECIFIERS
         .iter()
         .take_while(|specifier| specifier.name != "~")
+        .chain(&EXTENSIONS)
         .filter(|specifier| !specifier.is_placeholder())
         .map(|specifier| {
             [
@@ -669,7 +697,8 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        AIX_DESCRIPTORS, MACROS, SPECIFIERS, aix_descriptor, find, find_macro, listing, sort_code,
+        AIX_DESCRIPTORS, EXTENSIONS, Justification, MACROS, SPECIFIERS, aix_descriptor, find,
+        find_macro, listing, sort_code,
     };
 
     #[test]
@@ -744,22 +773,105 @@ mod tests {
         );
     }
 
+    /// The keywords of Apple's `ps`, as `/bin/ps -L` lists them on macOS 27. A
+    /// Darwin column must not have the name of a keyword that means something
+    /// else.
+    const APPLE_KEYWORDS: [&str; 88] = [
+        "%cpu", "%mem", "acflag", "acflg", "args", "blocked", "comm", "command", "cpu", "cputime",
+        "etime", "f", "flags", "gid", "group", "inblk", "inblock", "jobc", "ktrace", "ktracep",
+        "lim", "login", "logname", "lstart", "majflt", "minflt", "msgrcv", "msgsnd", "ni", "nice",
+        "nivcsw", "nsignals", "nsigs", "nswap", "nvcsw", "nwchan", "oublk", "oublock", "p_ru",
+        "paddr", "pagein", "pcpu", "pending", "pgid", "pid", "pmem", "ppid", "pri", "prsna",
+        "pstime", "putime", "re", "rgid", "rgroup", "rss", "ruid", "ruser", "sess", "sig",
+        "sigmask", "sl", "start", "stat", "state", "stime", "svgid", "svuid", "tdev", "time",
+        "tpgid", "tsess", "tsiz", "tt", "tty", "ucomm", "uid", "upr", "user", "usrpri", "utime",
+        "vsize", "vsz", "wchan", "wq", "wqb", "wql", "wqr", "xstat",
+    ];
+
+    #[test]
+    fn the_darwin_columns_have_names_of_their_own() {
+        let clashes: Vec<&str> = EXTENSIONS
+            .iter()
+            .map(|specifier| specifier.name)
+            .filter(|name| {
+                SPECIFIERS.iter().any(|specifier| specifier.name == *name)
+                    || APPLE_KEYWORDS.contains(name)
+                    || name.len() > 12
+            })
+            .collect();
+        let names: Vec<&str> = EXTENSIONS.iter().map(|specifier| specifier.name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+
+        assert_eq!((clashes, names), (Vec::<&str>::new(), sorted));
+    }
+
+    #[rstest]
+    #[case::footprint("footprint", Some(("FOOTPRINT", 9, false)))]
+    #[case::architecture("arch", Some(("ARCH", 6, false)))]
+    fn a_darwin_column_is_found_by_name(
+        #[case] name: &str,
+        #[case] expected: Option<(&str, usize, bool)>,
+    ) {
+        let found = find(name.as_bytes()).map(|specifier| {
+            (
+                specifier.header,
+                specifier.width(),
+                specifier.is_placeholder(),
+            )
+        });
+
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn the_darwin_columns_have_their_widths_and_alignments() {
+        let columns: Vec<(&str, usize, Justification)> = EXTENSIONS
+            .iter()
+            .map(|specifier| (specifier.name, specifier.width(), specifier.justification))
+            .collect();
+
+        assert_eq!(
+            columns,
+            [
+                ("arch", 6, Justification::Left),
+                ("csw", 6, Justification::Right),
+                ("cycles", 12, Justification::Right),
+                ("energy", 8, Justification::Right),
+                ("footprint", 9, Justification::Right),
+                ("instrs", 12, Justification::Right),
+                ("maxfootprint", 12, Justification::Right),
+                ("wired", 6, Justification::Right),
+            ]
+        );
+    }
+
     #[test]
     fn the_listing_has_procps_ng_s_layout() {
         let listing = String::from_utf8(listing().concat()).expect("the listing is ASCII");
         let lines: Vec<&str> = listing.lines().collect();
 
         assert_eq!(
-            (lines.len(), &lines[..3], lines[39], lines.last().copied()),
+            (lines.len(), &lines[..3], lines[39], &lines[197..]),
             (
-                198,
+                206,
                 &[
                     "%cpu         %CPU    ",
                     "%mem         %MEM    ",
                     "_left        LLLLLLLL"
                 ][..],
                 "environ      ENVIRONM",
-                Some("zone         ZONE    ")
+                &[
+                    "zone         ZONE    ",
+                    "arch         ARCH    ",
+                    "csw          CSW     ",
+                    "cycles       CYCLES  ",
+                    "energy       ENERGY  ",
+                    "footprint    FOOTPRIN",
+                    "instrs       INSTRS  ",
+                    "maxfootprint MAXFOOTP",
+                    "wired        WIRED   ",
+                ][..]
             )
         );
     }

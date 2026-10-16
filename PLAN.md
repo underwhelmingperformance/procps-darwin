@@ -76,7 +76,7 @@ accepts one; task 0.3 confirms this against a real procps-ng.
 
 ### ps
 
-Apple's `ps` is BSD `ps` with Apple changes. `ps -L` lists 64 keywords;
+Apple's `ps` is BSD `ps` with Apple changes. `ps -L` lists 88 keywords;
 procps-ng's man page documents 153 format specifiers.
 
 - Missing on macOS: every GNU long option (`--pid`, `--ppid`, `--sid`, `--tty`,
@@ -1366,10 +1366,18 @@ to task 5.4, which applies the rule for private values to `trs` and `drs`.
 All 153 specifiers, grouped by data source as in the appendix, plus the Darwin
 extensions. For a process whose private values the caller may not read, by the
 rule in `Caller::may_read_private`, `trs` is 0, `drs` is the virtual size and
-`exe` is `-`, as on Linux. Candidate extensions: physical footprint, peak
-footprint, energy, instructions, cycles, wired memory, context switches, CPU
-architecture, and whether the process runs under Rosetta. Final names are chosen
-under compatibility rule 5.
+`exe` is `-`, as on Linux.
+
+The Darwin extensions are `arch`, `csw`, `cycles`, `energy`, `footprint`,
+`instrs`, `maxfootprint` and `wired`, which `docs/mappings.md` describes. `arch`
+shows `x86_64` for a process under Rosetta, so it also says whether the process
+runs under Rosetta. Under compatibility rule 5, no name is one of procps-ng's
+specifiers or a keyword of Apple's `ps`. `csw`, `cycles` and `instrs` are the
+names that Apple's `top` gives the same values. No name is longer than 12 bytes,
+so `ps L` shows each name in full. `ps L` lists the extensions after procps-ng's
+specifiers. The reference test reads the golden file of `list-specifiers` and
+appends the extensions' lines to the expected output, so it still compares every
+line that procps-ng prints.
 
 Task 5.3 implements most specifiers, and this task adds the rest: `environ`,
 `exe`, `fds`, `lim`, `supgid`, `supgrp`, `uss`, `rbytes`, `wbytes` and `cuc`.
@@ -1536,4 +1544,5 @@ policy. Task 0.1 may move individual specifiers between groups.
 | Not applicable: shows `-`                                                                                          | `ag_id`, `ag_nice`, `cgname`, `cgroup`, `cgroupns`, `docker`, `ipcns`, `label`, `lsession`, `luid`, `lxc`, `machine`, `mntns`, `netns`, `numa`, `oom`, `oomadj`, `ouid`, `pcap`, `pcaps`, `pidns`, `seat`, `slice`, `timens`, `unit`, `userns`, `utsns`, `uunit`, `htprv`, `htshr`, `psr`, `cpu`, `cpuid`, `lastcpu`, `sgi_p`, `wchan`, `nwchan`, `rchars`, `wchars`, `rops`, `wops`, `wcbytes`                                                                                           |
 | Always 0, as Linux shows except while a task exits or dumps core                                                   | `eip`, `esp`                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 0 when the access policy denies access to the process's private values or the process has no memory, `-` otherwise | `stackp`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Darwin extensions                                                                                                  | `arch` (any user: `kinfo_proc`); `csw`, `footprint`, `maxfootprint`, `wired` (helper: task info, rusage); `cycles`, `energy`, `instrs` (helper, owner: rusage counters)                                                                                                                                                                                                                                                                                                                   |
 | Not readable for another process on macOS: shows `-`                                                               | `lim`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
