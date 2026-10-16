@@ -216,6 +216,15 @@ impl Process {
     /// ```
     #[must_use]
     pub fn linux_state(&self) -> LinuxState {
+        self.linux_state_with(self.state_letter())
+    }
+
+    /// The state with `letter`, which is the process's letter or one of its
+    /// threads' letters, followed by modifiers computed from the process. On
+    /// Linux, the `<` and `N` modifiers of a thread's row come from the
+    /// thread's own nice value. Darwin keeps one nice value for each process,
+    /// so every thread has its process's modifiers.
+    pub(crate) fn linux_state_with(&self, letter: Option<char>) -> LinuxState {
         let mut modifiers = String::new();
 
         if self.info.nice < 0 {
@@ -240,10 +249,7 @@ impl Process {
             modifiers.push('+');
         }
 
-        LinuxState {
-            letter: self.state_letter(),
-            modifiers,
-        }
+        LinuxState { letter, modifiers }
     }
 
     /// The state letter, or `None` if the source could not read the data that
@@ -349,7 +355,26 @@ impl Process {
             return other;
         };
 
-        let policy = match task.policy {
+        self.linux_priority_for(task.policy, task.priority)
+    }
+
+    /// The priority on Linux's scales of a process or thread with the Darwin
+    /// scheduling policy `policy` and the base priority `priority`, and with
+    /// this process's nice value. Darwin keeps one nice value for the whole
+    /// process.
+    pub(crate) fn linux_priority_for(
+        &self,
+        policy: SchedulingPolicy,
+        priority: i32,
+    ) -> LinuxPriority {
+        let nice = self.info.nice;
+        let other = LinuxPriority {
+            policy: None,
+            priority: 20 + i32::from(nice),
+            nice,
+            rt_priority: None,
+        };
+        let policy = match policy {
             SchedulingPolicy::Fifo => LinuxPolicy::Fifo,
             SchedulingPolicy::RoundRobin => LinuxPolicy::RoundRobin,
             SchedulingPolicy::Timeshare => {
@@ -362,7 +387,7 @@ impl Process {
             SchedulingPolicy::Other(_) => return other,
         };
 
-        let rt_priority = task.priority.clamp(1, MAXIMUM_RT_PRIORITY);
+        let rt_priority = priority.clamp(1, MAXIMUM_RT_PRIORITY);
 
         LinuxPriority {
             policy: Some(policy),

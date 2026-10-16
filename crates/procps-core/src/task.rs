@@ -6,7 +6,7 @@ use std::ffi::OsString;
 
 use darwin_proc::ThreadInfo;
 
-use crate::{Charset, Field, Process};
+use crate::{Charset, Field, LinuxPriority, LinuxState, Process};
 
 /// A Linux task: a process, or one of its threads. Linux calls each thread a
 /// task, and `pgrep -w` and `ps -L` list tasks.
@@ -212,6 +212,80 @@ impl<'a> LinuxTask<'a> {
             .linux_command_line_or(&self.command(charset), charset)
     }
 
+    /// The thread's record for a task that is a thread, or `None` for a task
+    /// that is the whole process.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let mut process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    /// process.threads = Some(Field::Available(Pid::current().threads()?));
+    ///
+    /// assert!(process.linux_task().thread().is_none());
+    /// assert!(process.linux_tasks()[0].thread().is_some());
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn thread(&self) -> Option<&'a ThreadInfo> {
+        match self.kind {
+            Kind::Process => None,
+            Kind::Thread { thread, .. } => Some(thread),
+        }
+    }
+
+    /// The task's state for procps-ng's `stat` column: the task's letter,
+    /// followed by modifiers computed from the process, because Darwin keeps
+    /// one nice value for each process.
+    ///
+    /// ```
+    /// use darwin_proc::{Pid, Status};
+    /// use procps_core::{Field, Process};
+    ///
+    /// let mut info = Pid::current().info()?;
+    /// info.status = Status::Zombie;
+    /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    ///
+    /// assert_eq!(process.linux_task().linux_state().letter(), 'Z');
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn linux_state(&self) -> LinuxState {
+        match self.kind {
+            Kind::Process => self.process.linux_state(),
+            Kind::Thread { .. } => self.process.linux_state_with(self.state_letter()),
+        }
+    }
+
+    /// The task's priority and nice value on Linux's scales. A thread has its
+    /// own scheduling policy and base priority, and its process's nice value,
+    /// because Darwin keeps one nice value for the whole process.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let nice = info.nice;
+    /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported);
+    ///
+    /// assert_eq!(
+    ///     process.linux_task().linux_priority().priority,
+    ///     20 + i32::from(nice)
+    /// );
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn linux_priority(&self) -> LinuxPriority {
+        match self.kind {
+            Kind::Process => self.process.linux_priority(),
+            Kind::Thread { thread, .. } => self
+                .process
+                .linux_priority_for(thread.policy, thread.base_priority),
+        }
+    }
+
     /// The task's state letter, or `None` if the source could not read the
     /// data that decides it.
     ///
@@ -238,12 +312,12 @@ impl<'a> LinuxTask<'a> {
 mod tests {
     use std::ffi::OsString;
 
-    use darwin_proc::{RunState, ThreadInfo};
+    use darwin_proc::{RunState, SchedulingPolicy, ThreadInfo};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
     use crate::{
-        Charset, Field, Process,
+        Charset, Field, LinuxPolicy, LinuxPriority, Process,
         testing::{self, thread},
     };
 
@@ -338,6 +412,57 @@ mod tests {
         assert_eq!(
             (summary(&process, Charset::Utf8), process.linux_task().id()),
             (vec![(10, OsString::from("worker"), state)], 10)
+        );
+    }
+
+    // Linux reads a thread's state from the thread's own `stat` file. Darwin
+    // has one nice value for each process, so every thread has the process's
+    // modifiers.
+    #[test]
+    fn a_thread_s_state_has_its_letter_and_the_process_s_modifiers() {
+        let mut process = process(Some(Field::Available(vec![
+            thread(1, b"", RunState::Waiting),
+            thread(2, b"", RunState::Running),
+        ])));
+        process.info.nice = 5;
+        process.info.session_leader = true;
+
+        let states: Vec<String> = [process.linux_task()]
+            .into_iter()
+            .chain(process.linux_tasks())
+            .map(|task| task.linux_state().to_string())
+            .collect();
+
+        assert_eq!(states, ["RNsl", "SNsl", "RNsl"]);
+    }
+
+    #[rstest]
+    #[case::timeshare(SchedulingPolicy::Timeshare, 4, Some(LinuxPolicy::Other), 25, Some(0))]
+    #[case::round_robin(SchedulingPolicy::RoundRobin, 47, Some(LinuxPolicy::RoundRobin), -48, Some(47))]
+    #[case::fifo(SchedulingPolicy::Fifo, 120, Some(LinuxPolicy::Fifo), -100, Some(99))]
+    #[case::unknown(SchedulingPolicy::Other(9), 31, None, 25, None)]
+    fn a_thread_has_its_own_policy_and_the_process_s_nice_value(
+        #[case] policy: SchedulingPolicy,
+        #[case] base_priority: i32,
+        #[case] linux_policy: Option<LinuxPolicy>,
+        #[case] priority: i32,
+        #[case] rt_priority: Option<i32>,
+    ) {
+        let mut process = process(Some(Field::Available(vec![ThreadInfo {
+            policy,
+            base_priority,
+            ..thread(1, b"", RunState::Waiting)
+        }])));
+        process.info.nice = 5;
+
+        assert_eq!(
+            process.linux_tasks()[0].linux_priority(),
+            LinuxPriority {
+                policy: linux_policy,
+                priority,
+                nice: 5,
+                rt_priority,
+            }
         );
     }
 }
