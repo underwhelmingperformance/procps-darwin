@@ -657,9 +657,10 @@ needs a ptrace read-access check. Linux has no per-process energy count. The
 rest of `ResourceUsage` goes to every user. The runnable time, which includes
 the running time, corresponds to `sum_exec_runtime` plus `run_delay` in
 `/proc/<pid>/schedstat`, and the wired size, footprint and page-ins to the sizes
-and faults in `status` and `stat`. The CPU times of the children that the
-process has reaped correspond to `cutime` and `cstime` in `stat`. The wakeups
-have no Linux counterpart, and reveal no more than the CPU time.
+and faults in `status` and `stat`. The CPU times and page-ins of the children
+that the process has reaped correspond to `cutime`, `cstime` and `cmajflt` in
+`stat`. The wakeups have no Linux counterpart, and reveal no more than the CPU
+time.
 
 The helper withholds the list of open file descriptors, because Linux lets only
 the owner list `/proc/<pid>/fd`. It sends their number to every user. Linux 6.2

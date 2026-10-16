@@ -36,7 +36,9 @@ pub struct ResourceUsage {
     pub idle_wakeups: u64,
     /// The number of wakeups by interrupts.
     pub interrupt_wakeups: u64,
-    /// The number of page faults that read from disk.
+    /// The number of page-ins. Darwin counts a page-in for each page that a
+    /// fault reads in, and also for the first fault on a page that an earlier
+    /// clustered read brought into memory.
     pub pageins: u64,
     /// The wired memory size in bytes.
     pub wired_size: u64,
@@ -53,6 +55,9 @@ pub struct ResourceUsage {
     pub children_user_time: Duration,
     /// The system CPU time of the same children as `children_user_time`.
     pub children_system_time: Duration,
+    /// The number of page-ins of the same children as `children_user_time`,
+    /// counted as for `pageins`.
+    pub children_pageins: u64,
 }
 
 /// A process's disk I/O, instruction, cycle and energy counters, from the same
@@ -106,6 +111,7 @@ impl ResourceUsage {
             peak_physical_footprint: raw.ri_lifetime_max_phys_footprint,
             children_user_time: timebase.duration(raw.ri_child_user_time),
             children_system_time: timebase.duration(raw.ri_child_system_time),
+            children_pageins: raw.ri_child_pageins,
         };
         let counters = ResourceCounters {
             disk_bytes_read: raw.ri_diskio_bytesread,
@@ -195,6 +201,7 @@ mod tests {
         raw.ri_energy_nj = 13;
         raw.ri_child_user_time = 48_000_000;
         raw.ri_child_system_time = 4_800_000;
+        raw.ri_child_pageins = 14;
 
         assert_eq!(
             ResourceUsage::decode(&raw, Timebase::new(125, 3)),
@@ -212,6 +219,7 @@ mod tests {
                     peak_physical_footprint: 7,
                     children_user_time: Duration::from_secs(2),
                     children_system_time: Duration::from_millis(200),
+                    children_pageins: 14,
                 },
                 ResourceCounters {
                     disk_bytes_read: 8,
