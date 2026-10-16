@@ -1339,14 +1339,14 @@ personality, the identity, terminal, time, memory and scheduling columns, the
 columns for Linux concepts that macOS lacks, which show `-`, and procps-ng's
 placeholders and test specifiers. It also implements the modifiers that the
 printers and the layout read: BSD's `c` and `n`, the header options, `w`, `ww`,
-`--cols`, `--rows`, `COLUMNS` and `LINES`. `ps` refuses the parts of later tasks
-with status 1 and a message that says which part is missing: the thread displays
-and process trees of task 5.5, and the modifiers `e`, `S`, `--cumulative` and
-`--signames`. Until task 5.4, it also refused the specifiers and sort keys that
-need values that task 5.4 adds. A zombie shows 0 for its sizes and one thread,
-as procps-ng shows them. Darwin does not report a zombie's scheduling policy,
-and Linux reports the policy that the process had before it exited, so the class
-`TS` of a zombie is an approximation, which is right for most processes.
+`--cols`, `--rows`, `COLUMNS` and `LINES`. Tasks 5.4 to 5.6 added the rest:
+specifiers and sort keys with new data, the thread displays and process trees,
+and the modifiers `e`, `S`, `--cumulative` and `--signames`. Until then, `ps`
+refused each of these with status 1 and a message that said which feature was
+missing. A zombie shows 0 for its sizes and one thread, as procps-ng shows them.
+Darwin does not report a zombie's scheduling policy, and Linux reports the
+policy that the process had before it exited, so the class `TS` of a zombie is
+an approximation, which is right for most processes.
 
 The reference scenarios check the default formats in UNIX and BSD syntax, `-j`,
 `-c`, the `bsd` personality, `-O`, BSD's `O`, a macro, the identity, terminal,
@@ -1431,16 +1431,98 @@ procps-ng's output for almost every process. No call reports the start of the
 main thread's stack, so `stackp` stays `-` for a process that `ps` may read and
 that has memory.
 
-#### 5.5 Threads and forest
+#### 5.5 Threads and forest (done)
 
-`-L`, `-T`, `H`, `m`, `-m`, `--forest`, `-H` and `f`. Until this task, `ps`
-refuses them with status 1.
+`-L`, `-T`, `H`, `m`, `-m`, `--forest`, `-H` and `f`.
 
-#### 5.6 Output modifiers
+`ps` ports the loops of procps-ng's `simple_spew` and `fancy_spew`. `-L`, `-T`
+and `H` give a row for each thread, and `m` and `-m` a row for each process
+followed by a row for each of its threads. In that combined listing, a process's
+row shows `-` in each column that procps-ng's table marks as a thread's, and a
+thread's row shows `-` in each column for the whole process. `simple_spew` sorts
+the tasks of the combined listing by process ID. The sort options are applied in
+`fancy_spew`, which reads the threads only for `H`, so a sorted listing with
+`-L`, `-T`, `m` or `-m` has a row for each process. The rows use the threads of
+`LinuxTask`, which `pgrep -w` uses too. A listing with rows of threads always
+requests the threads group, and a listing of processes requests it when a
+column, a sort key or BSD's `r` needs the state of the threads.
+
+A listing with rows of threads applies the selection to each task, so `-C`
+compares a thread's own name. In the combined listing, the first task of a
+process that the selection selects gives the process's row, and that task and
+the later threads of the process give thread rows without a further check of the
+selection. When that first task is not the main thread, procps-ng 4.0.7 prints
+the process's row again and again, and never finishes the listing. The loop of
+thread rows in `simple_spew` starts at the selected task and compares the task's
+thread ID with its process ID before it moves on. The two differ, so the loop
+ends at once, and the selection checks the same task again. `ps` deliberately
+prints the process's row once and then the thread rows. procps-ng never finishes
+such a listing, so unit tests check this case.
+
+A selection by command name needs the names of the threads, which the identity
+snapshot does not have. When the rows show threads and the selection has `-C`,
+the first snapshot therefore also reads the threads of every process, unless
+`-A`, `-e` or BSD's `ax` accepts every task anyway. The second snapshot then
+reads the other requested data only for the processes that have at least one
+task that the selection may select, and keeps their threads from the first
+snapshot. A process that has become a zombie by the second snapshot keeps its
+start time, so it stays a candidate, but it does not keep its threads, because a
+zombie has none on Darwin. When the second snapshot read every requested group
+for every process, `ps -L -C zsh -o pid,lwp,trs` walked the memory regions of
+about 1150 processes and took 4.0 seconds in a debug build. It now takes 72 ms.
+
+With rows of threads, repetitions of a pid next to each other in `-q` give one
+listing of the process's threads, because procps-ng's `simple_nexttid` reads the
+threads of a process again only after another process. Another process that
+exists between the repetitions makes procps-ng list the threads again. For a
+list such as `A,X,A`, where X does not exist, procps-ng 4.0.7 crashes with
+`SIGSEGV`: the failed opening of X's `task` directory sets `taskdir` to `NULL`,
+but leaves `taskdir_user` set to A, so the second A calls `readdir(NULL)`. `ps`
+deliberately lists A's threads once, and a unit test checks it.
+
+A thread's row shows its own state, CPU time, scheduling policy and priority, as
+Linux reads them from `/proc/<pid>/task/<tid>`, and `docs/mappings.md` lists
+what Darwin lacks for a thread: page faults, a nice value of its own and a start
+time. Without root or the helper, Darwin withholds another user's threads, and
+`ps -L` shows one row for such a process, with the pid in the `lwp` column.
+
+The process trees port `prep_forest_sort`, `show_forest`, `show_tree` and
+`forest_helper`. The tree sorts by the keys of `--sort`, or by start time, and
+then by the parent's pid. It looks for roots from the last process to the first,
+so the trees are in the reverse of the order that the sort gives their roots.
+
+The reference scenarios compare each thread option, the combined listings, a
+quick listing and the sorted listings, and each tree option, a sorted tree and a
+tree of several roots, with procps-ng. The thread IDs differ between Linux and
+Darwin, so the scenarios leave out the `lwp`, `tid` and `spid` columns, and unit
+tests check them. The scenarios also leave out the state of each thread. A
+fixture reports that it is ready before its extra threads have all started to
+wait, and the generation intermittently rejected the scenarios that showed the
+threads' states, because their outcomes differed with and without decoys. Unit
+tests check the states of threads instead.
+
+#### 5.6 Output modifiers (done)
 
 `c`, `e`, `n`, `S`, `h`, `--headers`, `--no-headers`, `w`, `ww`, `--cols`, and
 the `COLUMNS` and `LINES` environment variables. Task 5.3 implements all of them
 except `e` and `S`, and this task adds those two and `--signames`.
+
+`e` adds the environment after the command in the command columns, as
+procps-ng's `pr_cmd_or_cmdline` does, when the column has more than one cell
+left and the environment is readable. `S` and `--cumulative` add the CPU time of
+reaped children to `bsdtime`, `%cpu`, `c` and `cp`, and their page-ins to
+`maj_flt`, from `ri_child_user_time`, `ri_child_system_time` and
+`ri_child_pageins`. `time` keeps the process's own time, as in procps-ng 4.0.7.
+`proc_pid_rusage` does not report the other faults of a process's children, so
+`min_flt` shows `-` with these options. `--signames` shows the names of the
+signals in `caught` and `ignored`, from the table that `pkill` reads, in the
+order of Darwin's numbers. procps-ng also makes each mask column at least 27
+cells wide and replaces its flags with `CF_UNLIMITED`, so the column is aligned
+on the left. The new flags no longer say whether a process's row or a thread's
+row shows the column, so with `m` or `-m` and a mask column, procps-ng reports a
+bug, and `ps` reports the same bug. The reference scenarios compare each option
+with procps-ng. The fixtures have no reaped children, so unit tests check the
+cumulative values.
 
 #### 5.7 Tests
 
