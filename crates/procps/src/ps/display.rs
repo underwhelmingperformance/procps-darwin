@@ -18,6 +18,7 @@ use procps_core::{
 
 use crate::ps::{
     error::{PsError, Unimplemented},
+    forest::{self, Branch},
     format::{Content, Order},
     layout::{self, Layout},
     names::Names,
@@ -48,10 +49,6 @@ pub(crate) struct Invocation {
 
 /// The first part of `options` that this project does not implement yet.
 fn unimplemented(options: &Options) -> Option<Unimplemented> {
-    if options.forest.is_some() {
-        return Some(Unimplemented::Forest);
-    }
-
     let modifiers = [
         (Modifiers::ENVIRONMENT, "e"),
         (Modifiers::CUMULATIVE, "S"),
@@ -432,15 +429,16 @@ pub(crate) fn list(
         return Err(PsError::Unimplemented(unimplemented));
     }
 
-    let sorted = !options.sort.is_empty();
+    // procps-ng's `fancy_spew` sorts and shows process trees.
+    let fancy = options.forest.is_some() || !options.sort.is_empty();
     let quick = options.selection.quick_pids().is_some();
     let listing = read(options, invocation, source).map_err(|error| PsError::Source {
         quick,
-        sorted,
+        sorted: fancy,
         error,
     })?;
 
-    if sorted && listing.identities.processes.is_empty() {
+    if fancy && listing.identities.processes.is_empty() {
         return Err(PsError::EmptyProcessTable);
     }
 
@@ -453,10 +451,16 @@ pub(crate) fn list(
         date_format: options.date_format.clone(),
         page_size: invocation.page_size,
         calendar: invocation.calendar,
+        forest: options.forest,
     };
     let mut context = Context::new(data, &listing.identities, settings, Names::new(system));
 
-    sort::sort(&mut rows, &options.sort, &mut context);
+    let keys = match options.forest {
+        Some(_) => forest::sort_keys(&options.sort),
+        None => options.sort.clone(),
+    };
+
+    sort::sort(&mut rows, &keys, &mut context);
 
     let mut layout = Layout::new(
         &options.columns,
@@ -468,8 +472,21 @@ pub(crate) fn list(
         },
     );
     let both = options.threads.contains(ThreadFlags::SHOW_BOTH);
+    let order: Vec<(usize, Vec<Branch>)> = if options.forest.is_some() {
+        let processes: Vec<_> = rows
+            .iter()
+            .map(|(task, _)| (task.process().info.pid, task.process().info.ppid))
+            .collect();
 
-    for (task, kind) in &rows {
+        forest::rows(&processes)
+    } else {
+        (0..rows.len()).map(|index| (index, Vec::new())).collect()
+    };
+
+    for (index, prefix) in order {
+        let (task, kind) = &rows[index];
+
+        context.set_forest_prefix(&prefix);
         layout.row(
             |specifier, room| {
                 if both && kind.hides(specifier.print) {
@@ -1025,8 +1042,90 @@ mod tests {
         );
     }
 
+    /// A source that cannot take a snapshot.
+    struct Failing;
+
+    impl ProcessSource for Failing {
+        fn snapshot(&self, _: &SnapshotRequest) -> Result<Snapshot, SourceError> {
+            Err(SourceError::TimedOut)
+        }
+    }
+
+    /// The error that `list` returns for `line` with `source`.
+    fn error_of(line: &[&str], source: &impl ProcessSource) -> Option<PsError> {
+        list(
+            &options(line),
+            &invocation(),
+            source,
+            &system(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .err()
+    }
+
+    // procps-ng sorts and shows process trees in `fancy_spew`, which reports
+    // its own errors.
     #[rstest]
-    #[case::forest(&["--forest"], Unimplemented::Forest)]
+    #[case::simple(&["-o", "pid"], false)]
+    #[case::sorted(&["--sort=pid", "-o", "pid"], true)]
+    #[case::forest(&["--forest", "-o", "pid"], true)]
+    fn a_failed_snapshot_reports_the_listing_s_error(#[case] line: &[&str], #[case] fancy: bool) {
+        assert_matches!(
+            error_of(line, &Failing),
+            Some(PsError::Source { quick: false, sorted, error: SourceError::TimedOut })
+                if sorted == fancy
+        );
+    }
+
+    #[rstest]
+    #[case::sorted(&["--sort=pid", "-o", "pid"])]
+    #[case::forest(&["--forest", "-o", "pid"])]
+    fn a_fancy_listing_of_an_empty_table_is_an_error(#[case] line: &[&str]) {
+        assert_matches!(
+            error_of(line, &Recording::new(Vec::new())),
+            Some(PsError::EmptyProcessTable)
+        );
+    }
+
+    #[rstest]
+    #[case::gnu(
+        &["--forest", "-A", "-o", "pid,comm"],
+        "  PID COMMAND\n    1 launchd\n   50  \\_ zsh\n   60  |   \\_ sleep\n   61  |   \\_ cat\n  100  |   \\_ ps\n  300  |   \\_ defunct <defunct>\n  200  \\_ daemon\n"
+    )]
+    #[case::bsd(
+        &["f", "-A", "-o", "pid,args"],
+        "  PID COMMAND\n    1 launchd\n   50  \\_ zsh\n   60  |   \\_ sleep\n   61  |   \\_ cat\n  100  |   \\_ ps\n  300  |   \\_ defunct\n  200  \\_ daemon\n"
+    )]
+    #[case::unix(
+        &["-H", "-A", "-o", "pid,fname"],
+        "  PID COMMAND\n    1 launchd\n   50   zsh\n   60     sleep\n   61     cat\n  100     ps\n  300     defunct\n  200   daemon\n"
+    )]
+    #[case::sorted_siblings(
+        &["--forest", "--sort=-pid", "-A", "-o", "pid,comm"],
+        "  PID COMMAND\n    1 launchd\n  200  \\_ daemon\n   50  \\_ zsh\n  300      \\_ defunct <defunct>\n  100      \\_ ps\n   61      \\_ cat\n   60      \\_ sleep\n"
+    )]
+    #[case::cut_prefix(
+        &["--forest", "-A", "-o", "comm:6,pid"],
+        "COMMAND  PID\nlaunch     1\n \\_ zs    50\n |  sl    60\n |  ca    61\n |  ps   100\n |  de   300\n \\_ da   200\n"
+    )]
+    #[case::subtree(
+        &["--forest", "--ppid", "50", "-o", "pid,comm"],
+        "  PID COMMAND\n  300 defunct <defunct>\n  100 ps\n   61 cat\n   60 sleep\n"
+    )]
+    fn ps_shows_process_trees_as_procps_ng_shows_them(
+        #[case] line: &[&str],
+        #[case] expected: &str,
+    ) {
+        let (stdout, stderr, result) = listed(line);
+
+        assert_eq!(
+            (stdout.as_str(), stderr.as_str(), result.ok()),
+            (expected, "", Some(true))
+        );
+    }
+
+    #[rstest]
     #[case::environment(&["e"], Unimplemented::Option("e"))]
     #[case::cumulative(&["S"], Unimplemented::Option("S"))]
     #[case::signal_names(&["--signames"], Unimplemented::Option("--signames"))]

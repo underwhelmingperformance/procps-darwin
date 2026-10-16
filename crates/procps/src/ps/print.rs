@@ -24,7 +24,12 @@ use procps_core::{
 
 use crate::{
     linux::{self, Clock},
-    ps::{escape, names::Names, options::Modifiers},
+    ps::{
+        escape,
+        forest::{self, Branch},
+        names::Names,
+        options::{Forest, Modifiers},
+    },
 };
 
 /// The size of procps-ng's output buffer, which limits the text of a column.
@@ -244,6 +249,11 @@ pub(crate) struct Context<'a> {
     names: Names<'a>,
     /// Breaks a time down in the time zone that the start columns use.
     calendar: fn(i64) -> Option<CalendarTime>,
+    /// The process tree, if one is shown.
+    forest: Option<Forest>,
+    /// The prefix of the current row in the process tree
+    /// (`forest_prefix`).
+    forest_prefix: Vec<Branch>,
 }
 
 /// The settings of a [`Context`] that come from the options and the system.
@@ -262,6 +272,8 @@ pub(crate) struct Settings {
     pub(crate) page_size: u64,
     /// Breaks a time down in the time zone that the start columns use.
     pub(crate) calendar: fn(i64) -> Option<CalendarTime>,
+    /// The process tree, if one is shown.
+    pub(crate) forest: Option<Forest>,
 }
 
 impl<'a> Context<'a> {
@@ -299,7 +311,23 @@ impl<'a> Context<'a> {
             page_size: settings.page_size,
             names,
             calendar: settings.calendar,
+            forest: settings.forest,
+            forest_prefix: Vec::new(),
         }
+    }
+
+    /// Sets the prefix of the next row in the process tree, which the
+    /// command columns show before the command.
+    pub(crate) fn set_forest_prefix(&mut self, prefix: &[Branch]) {
+        prefix.clone_into(&mut self.forest_prefix);
+    }
+
+    /// The text of the current row's prefix in the process tree, for a
+    /// column with `cells` of room, or no text without a process tree.
+    fn forest_text(&self, cells: usize) -> Vec<u8> {
+        self.forest
+            .map(|forest| forest::text(forest, &self.forest_prefix, cells))
+            .unwrap_or_default()
     }
 
     /// The identity of every process.
@@ -705,12 +733,20 @@ impl Printer {
             }
             Self::Fname => {
                 let name = task.command(context.charset);
-                let cells = room.cells.min(8);
-                let escaped = escape::escape(name.as_bytes(), context.utf8(), cells, OUTBUF_SIZE);
+                let mut bytes = context.forest_text(room.cells);
+                let cells = (room.cells - bytes.len()).min(8);
+                let escaped = escape::escape(
+                    name.as_bytes(),
+                    context.utf8(),
+                    cells,
+                    OUTBUF_SIZE - bytes.len(),
+                );
                 let left = cells - escaped.cells;
 
+                bytes.extend(escaped.bytes);
+
                 Cell {
-                    bytes: escaped.bytes,
+                    bytes,
                     amount: i64::try_from(room.cells - left).unwrap_or(i64::MAX),
                 }
             }
@@ -1035,8 +1071,8 @@ impl Printer {
 }
 
 /// The command name, or the command line, as procps-ng's
-/// `pr_cmd_or_cmdline` prints it. A zombie's name is followed by
-/// ` <defunct>`.
+/// `pr_cmd_or_cmdline` prints it, after the prefix of a process tree. A
+/// zombie's name is followed by ` <defunct>`.
 fn command_or_command_line(
     context: &Context<'_>,
     task: &LinuxTask<'_>,
@@ -1049,23 +1085,24 @@ fn command_or_command_line(
     } else {
         task.command(context.charset)
     };
-    let mut escaped = escape::escape(text.as_bytes(), utf8, room.cells, OUTBUF_SIZE);
+    let mut bytes = context.forest_text(room.cells);
+    let mut rightward = room.cells - bytes.len();
+    let mut append = |bytes: &mut Vec<u8>, text: &[u8]| {
+        let escaped = escape::escape(text, utf8, rightward, OUTBUF_SIZE - bytes.len());
+
+        bytes.extend(escaped.bytes);
+        rightward -= escaped.cells;
+    };
+
+    append(&mut bytes, text.as_bytes());
 
     if !command_line && task.state_letter() == Some('Z') {
-        let defunct = escape::escape(
-            b" <defunct>",
-            utf8,
-            room.cells - escaped.cells,
-            OUTBUF_SIZE - escaped.bytes.len(),
-        );
-
-        escaped.bytes.extend(defunct.bytes);
-        escaped.cells += defunct.cells;
+        append(&mut bytes, b" <defunct>");
     }
 
     Cell {
-        bytes: escaped.bytes,
-        amount: i64::try_from(escaped.cells).unwrap_or(i64::MAX),
+        bytes,
+        amount: i64::try_from(room.cells - rightward).unwrap_or(i64::MAX),
     }
 }
 
@@ -1555,6 +1592,7 @@ pub(crate) mod tests {
             date_format: None,
             page_size: 16_384,
             calendar: CalendarTime::utc,
+            forest: None,
         }
     }
 
