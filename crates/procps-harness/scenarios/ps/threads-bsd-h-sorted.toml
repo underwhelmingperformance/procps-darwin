@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a sorted listing with H has a row for each thread"
+command = ["ps", "H", "--sort=-pid", "-o", "pid,comm", "-p", "{a1},{b1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+threads = 2
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"

@@ -278,9 +278,10 @@ impl Item {
             Self::SmapPrvTotal => unsigned(print::unique_size(process)),
             Self::Supgids => Value::Text(print::supplementary_gids(process)),
             Self::Supgroups => Value::Text(print::supplementary_groups(context, process)),
-            Self::TicsUserC => unsigned(print::user_ticks_with_children(process)),
-            Self::UtilizationC => print::utilization_with_children(context, process)
-                .map_or(Value::Missing, Value::Real),
+            Self::TicsUserC => unsigned(print::user_ticks_with_children(task)),
+            Self::UtilizationC => {
+                print::utilization_with_children(context, task).map_or(Value::Missing, Value::Real)
+            }
             // Linux shows `VmExe` in `status` to every user, so this key does
             // not apply the access check that hides the code size in `trs`.
             Self::VmExe => unsigned(
@@ -299,8 +300,8 @@ impl Item {
             ),
             Self::Cmdline => Value::Text(task.command_line(context.charset()).as_bytes().to_vec()),
             Self::Flags => Value::Unsigned(process.linux_flags()),
-            Self::FltMaj => unsigned(print::major_faults(process)),
-            Self::FltMin => unsigned(print::minor_faults(process)),
+            Self::FltMaj => unsigned(print::major_faults(task)),
+            Self::FltMin => unsigned(print::minor_faults(task)),
             Self::IdEgid | Self::IdFgid => Value::Unsigned(credentials.egid.as_raw().into()),
             Self::IdEuid | Self::IdFuid => Value::Unsigned(credentials.euid.as_raw().into()),
             Self::IdRgid => Value::Unsigned(credentials.rgid.as_raw().into()),
@@ -338,28 +339,26 @@ impl Item {
             Self::Nlwp => process.thread_count().map_or(Value::Missing, |count| {
                 u64::try_from(count).map_or(Value::Missing, Value::Unsigned)
             }),
-            Self::Priority => Value::Signed(process.linux_priority().priority.into()),
-            Self::PriorityRt => process
+            Self::Priority => Value::Signed(task.linux_priority().priority.into()),
+            Self::PriorityRt => task
                 .linux_priority()
                 .rt_priority
                 .map_or(Value::Missing, |priority| Value::Signed(priority.into())),
-            Self::SchedClass => {
-                Value::Signed(print::class_number(&process.linux_priority()).into())
-            }
-            Self::SchedClassstr => Value::Text(process.linux_priority().class().into()),
+            Self::SchedClass => Value::Signed(print::class_number(&task.linux_priority()).into()),
+            Self::SchedClassstr => Value::Text(task.linux_priority().class().into()),
             Self::Sigcatch => Value::Text(print::signal_mask(info.caught_signals.bits())),
             Self::Sigignore => Value::Text(print::signal_mask(info.ignored_signals.bits())),
             Self::State => task.state_letter().map_or(Value::Missing, |letter| {
                 Value::Signed(u32::from(letter).into())
             }),
-            Self::TicsAll => unsigned(print::cpu_ticks(process)),
+            Self::TicsAll => unsigned(print::cpu_ticks(task)),
             Self::TicsBegan => Value::Unsigned(context.clock().tick(info.start_time)),
-            Self::TicsUser => unsigned(print::user_ticks(process)),
-            Self::TimeAll => print::cpu_seconds(process).map_or(Value::Missing, Value::Real),
+            Self::TicsUser => unsigned(print::user_ticks(task)),
+            Self::TimeAll => print::cpu_seconds(task).map_or(Value::Missing, Value::Real),
             Self::TimeElapsed => Value::Real(print::elapsed(context, process)),
             Self::TtyName => Value::Version(print::terminal(process, false)),
             Self::Utilization => {
-                print::utilization(context, process).map_or(Value::Missing, Value::Real)
+                print::utilization(context, task).map_or(Value::Missing, Value::Real)
             }
             Self::VmRss => unsigned(print::sizes(process).map(|(_, resident)| resident / 1024)),
             Self::VmSize => unsigned(print::sizes(process).map(|(size, _)| size / 1024)),
@@ -419,11 +418,16 @@ impl Item {
     }
 }
 
-/// Sorts `tasks` by each of `keys` in turn, as procps-ng's `fancy_spew`
-/// does. Each sort is stable, so the last key is the most significant, and
-/// tasks that every key finds equal keep their order. A key whose order is
-/// [`Order::Ignored`] does not sort.
-pub(crate) fn sort(tasks: &mut Vec<LinuxTask<'_>>, keys: &[SortKey], context: &mut Context<'_>) {
+/// Sorts `rows` by the tasks' values for each of `keys` in turn, as
+/// procps-ng's `fancy_spew` does. Each sort is stable, so the last key is the
+/// most significant, and rows that every key finds equal keep their order. A
+/// key whose order is [`Order::Ignored`] does not sort. Each row has a task
+/// and a value, such as the kind of row, that moves with it.
+pub(crate) fn sort<'a, T>(
+    rows: &mut Vec<(LinuxTask<'a>, T)>,
+    keys: &[SortKey],
+    context: &mut Context<'_>,
+) {
     for key in keys {
         let descending = match key.order {
             Order::Ascending => false,
@@ -431,9 +435,9 @@ pub(crate) fn sort(tasks: &mut Vec<LinuxTask<'_>>, keys: &[SortKey], context: &m
             Order::Ignored => continue,
         };
         let item = key.specifier.sort;
-        let mut valued: Vec<(Value, LinuxTask<'_>)> = tasks
+        let mut valued: Vec<(Value, (LinuxTask<'a>, T))> = rows
             .drain(..)
-            .map(|task| (item.value(context, &task), task))
+            .map(|row| (item.value(context, &row.0), row))
             .collect();
 
         valued.sort_by(|(left, _), (right, _)| {
@@ -441,7 +445,7 @@ pub(crate) fn sort(tasks: &mut Vec<LinuxTask<'_>>, keys: &[SortKey], context: &m
 
             if descending { order.reverse() } else { order }
         });
-        tasks.extend(valued.into_iter().map(|(_, task)| task));
+        rows.extend(valued.into_iter().map(|(_, row)| row));
     }
 }
 
@@ -514,14 +518,14 @@ mod tests {
         let mut tasks: Vec<_> = snapshot
             .processes
             .iter()
-            .map(|process| process.linux_task())
+            .map(|process| (process.linux_task(), ()))
             .collect();
 
         sort(&mut tasks, &keys, &mut context);
 
         let pids: Vec<i32> = tasks
             .iter()
-            .map(|task| task.process().info.pid.as_raw())
+            .map(|(task, ())| task.process().info.pid.as_raw())
             .collect();
 
         assert_eq!(pids, expected);
@@ -628,14 +632,14 @@ mod tests {
         let mut tasks: Vec<_> = snapshot
             .processes
             .iter()
-            .map(|process| process.linux_task())
+            .map(|process| (process.linux_task(), ()))
             .collect();
 
         sort(&mut tasks, &[key], &mut context);
 
         tasks
             .iter()
-            .map(|task| task.process().info.pid.as_raw())
+            .map(|(task, ())| task.process().info.pid.as_raw())
             .collect()
     }
 
@@ -967,7 +971,7 @@ mod tests {
         let mut tasks: Vec<_> = snapshot
             .processes
             .iter()
-            .map(|process| process.linux_task())
+            .map(|process| (process.linux_task(), ()))
             .collect();
 
         sort(
@@ -978,7 +982,7 @@ mod tests {
 
         let pids: Vec<i32> = tasks
             .iter()
-            .map(|task| task.process().info.pid.as_raw())
+            .map(|(task, ())| task.process().info.pid.as_raw())
             .collect();
 
         assert_eq!(pids, expected);

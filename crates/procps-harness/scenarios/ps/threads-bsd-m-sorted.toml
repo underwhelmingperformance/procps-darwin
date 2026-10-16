@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "a sorted listing with m has a row for each process, with dashes for the columns of threads"
+command = ["ps", "m", "--sort=pid", "-o", "pid,stat,comm", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+threads = 2

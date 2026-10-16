@@ -1,0 +1,15 @@
+status = 0
+stdout = """
+  PID TTY        TIME COMMAND
+{a1} ?          0:00 harness-alpha --procps-harness-fixture --threads=2
+    - -          0:00 -
+    - -          0:00 -
+    - -          0:00 -
+{b1} ?          0:00 harness-beta --procps-harness-fixture
+    - -          0:00 -
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"
+b1 = "running"

@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "-L lists a pid of -q that directly follows itself once, and a pid that follows another pid again"
+command = ["ps", "-L", "-o", "pid,comm", "-q", "{a1},{a1},{b1},{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+threads = 2
+
+[[fixture]]
+name = "b1"
+comm = "harness-beta"
