@@ -356,9 +356,6 @@ impl InternalError {
 /// A part of `ps` that this project does not implement yet.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum Unimplemented {
-    /// Rows for threads: `-L`, `-T`, `H`, `m` and `-m` (task 5.5).
-    #[error("the thread display is not implemented yet")]
-    Threads,
     /// A process tree: `-H`, `f` and `--forest` (task 5.5).
     #[error("the process tree is not implemented yet")]
     Forest,

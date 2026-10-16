@@ -11,7 +11,7 @@
 
 use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 
-use procps_core::{Charset, FieldGroup, Process, Snapshot};
+use procps_core::{Charset, FieldGroup, LinuxTask, Process, Snapshot};
 
 use crate::{
     c_number::{Base, whole_strtoul},
@@ -168,27 +168,35 @@ impl Selection {
         }
     }
 
-    /// Whether the selection accepts `process` before BSD's `r` and `-N`
+    /// Whether the selection accepts `task` before BSD's `r` and `-N`
     /// apply, as the first part of procps-ng's `want_this_proc` decides.
-    /// `-A`, `-e` and BSD's `ax` accept every process. Otherwise, the tests
-    /// of the selection options without values apply when one of those
-    /// options was given, and also when no selection list was given. A
-    /// process is accepted if it passes those tests or if one of the lists
-    /// matches it.
+    /// `-A`, `-e` and BSD's `ax` accept every task. Otherwise, the tests of
+    /// the selection options without values apply when one of those options
+    /// was given, and also when no selection list was given. A task is
+    /// accepted if it passes those tests or if one of the lists matches it.
     pub(crate) fn accepts(
         &self,
         snapshot: &Snapshot,
-        process: &Process,
+        task: &LinuxTask<'_>,
         myself: Myself,
         charset: Charset,
     ) -> bool {
         self.all
             || ((self.simple.contains(SimpleTests::GIVEN) || self.lists.is_empty())
-                && self.simple_accept(process, myself))
+                && self.simple_accept(task.process(), myself))
             || self
                 .lists
                 .iter()
-                .any(|selector| selector.matches(snapshot, process, myself, charset))
+                .any(|selector| selector.matches(snapshot, task, myself, charset))
+    }
+
+    /// Whether the selection can accept a thread and not its process, or the
+    /// reverse. Only `-C` compares a value that a thread has for itself: its
+    /// name.
+    pub(crate) fn depends_on_threads(&self) -> bool {
+        self.lists
+            .iter()
+            .any(|selector| matches!(selector, Selector::Commands(_)))
     }
 
     /// Whether a process might be selected, given whether the selection
@@ -203,12 +211,12 @@ impl Selection {
         }
     }
 
-    /// Whether the selection selects `process`, given whether it accepts it,
-    /// as the end of procps-ng's `want_this_proc` decides. BSD's `r` keeps
-    /// the processes that are running or in an uninterruptible wait, and
-    /// `-N` then inverts the result.
-    pub(crate) fn selects(&self, accepted: bool, process: &Process) -> bool {
-        let running = matches!(process.linux_state().known_letter(), Some('R' | 'D'));
+    /// Whether the selection selects `task`, given whether it accepts it, as
+    /// the end of procps-ng's `want_this_proc` decides. BSD's `r` keeps the
+    /// tasks that are running or in an uninterruptible wait, and `-N` then
+    /// inverts the result.
+    pub(crate) fn selects(&self, accepted: bool, task: &LinuxTask<'_>) -> bool {
+        let running = matches!(task.state_letter(), Some('R' | 'D'));
 
         (accepted && (running || !self.running_only)) != self.negate
     }
@@ -228,15 +236,16 @@ impl Selection {
 }
 
 impl Selector {
-    /// Whether one of the selector's values matches `process`, as
-    /// procps-ng's `proc_was_listed` decides.
+    /// Whether one of the selector's values matches `task`, as procps-ng's
+    /// `proc_was_listed` decides. A thread matches `-C` by its own name.
     fn matches(
         &self,
         snapshot: &Snapshot,
-        process: &Process,
+        task: &LinuxTask<'_>,
         myself: Myself,
         charset: Charset,
     ) -> bool {
+        let process = task.process();
         let info = &process.info;
         let credentials = &info.credentials;
 
@@ -260,7 +269,7 @@ impl Selector {
                 })
             }
             Self::Commands(commands) => {
-                let name = process.linux_command(charset);
+                let name = task.command(charset);
 
                 commands
                     .iter()

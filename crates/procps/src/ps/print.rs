@@ -13,6 +13,7 @@
 use std::{
     ffi::{CStr, CString},
     os::unix::ffi::OsStrExt,
+    time::Duration,
 };
 
 use darwin_proc::{CalendarTime, ResourceCounters, ResourceUsage, Status, TaskInfo};
@@ -204,7 +205,7 @@ impl Cell {
 
     /// `-`, which procps-ng's `pr_nop` prints, and which the tools print for
     /// a value that they cannot read or that macOS lacks.
-    fn dash() -> Self {
+    pub(crate) fn dash() -> Self {
         Self::text(*b"-")
     }
 }
@@ -338,30 +339,39 @@ pub(crate) fn task_info(process: &Process) -> Option<&TaskInfo> {
     process.usage.as_ref()?.task.available()
 }
 
-/// The CPU time of `process` in clock ticks, as Linux reports `utime` plus
-/// `stime` (`TICS_ALL`). A zombie has no task information, so its time comes
-/// from its resource usage.
-pub(crate) fn cpu_ticks(process: &Process) -> Option<u64> {
-    let usage = process.usage.as_ref()?;
-    let (user, system) = match (usage.task.available(), usage.resources.available()) {
-        (Some(task), _) => (task.user_time, task.system_time),
-        (None, Some(resources)) => (resources.user_time, resources.system_time),
-        (None, None) => return None,
-    };
+/// The user and system CPU time of `task`: a thread's own times, or for a
+/// whole process the times in its task information. A zombie has no task
+/// information, so its times come from its resource usage.
+fn cpu_times(task: &LinuxTask<'_>) -> Option<(Duration, Duration)> {
+    if let Some(thread) = task.thread() {
+        return Some((thread.user_time, thread.system_time));
+    }
 
-    Some(Clock::ticks(user) + Clock::ticks(system))
+    let usage = task.process().usage.as_ref()?;
+
+    match (usage.task.available(), usage.resources.available()) {
+        (Some(task), _) => Some((task.user_time, task.system_time)),
+        (None, Some(resources)) => Some((resources.user_time, resources.system_time)),
+        (None, None) => None,
+    }
 }
 
-/// The user CPU time of `process` in clock ticks (`TICS_USER`).
-pub(crate) fn user_ticks(process: &Process) -> Option<u64> {
-    let usage = process.usage.as_ref()?;
-    let user = match (usage.task.available(), usage.resources.available()) {
-        (Some(task), _) => task.user_time,
-        (None, Some(resources)) => resources.user_time,
-        (None, None) => return None,
-    };
+/// The CPU time of `task` in clock ticks, as Linux reports `utime` plus
+/// `stime` (`TICS_ALL`).
+pub(crate) fn cpu_ticks(task: &LinuxTask<'_>) -> Option<u64> {
+    cpu_times(task).map(|(user, system)| Clock::ticks(user) + Clock::ticks(system))
+}
 
-    Some(Clock::ticks(user))
+/// The user CPU time of `task` in clock ticks (`TICS_USER`).
+pub(crate) fn user_ticks(task: &LinuxTask<'_>) -> Option<u64> {
+    cpu_times(task).map(|(user, _)| Clock::ticks(user))
+}
+
+/// The CPU time of `task` and of the reaped children of its process, in
+/// clock ticks (`TICS_ALL_C`). The threads of a Linux process share the
+/// children's times.
+fn cpu_ticks_with_children(task: &LinuxTask<'_>) -> Option<u64> {
+    Some(cpu_ticks(task)? + children_ticks(task.process())?)
 }
 
 /// The ticks between the start of `process` and the snapshot, as procps-ng
@@ -390,48 +400,55 @@ pub(crate) fn elapsed(context: &Context<'_>, process: &Process) -> f64 {
     }
 }
 
-/// The CPU time of `process` in seconds (`TIME_ALL`).
+/// The CPU time of `task` in seconds (`TIME_ALL`).
 #[expect(
     clippy::cast_precision_loss,
     reason = "procps-ng divides the ticks as a double"
 )]
-pub(crate) fn cpu_seconds(process: &Process) -> Option<f64> {
-    cpu_ticks(process).map(|ticks| ticks as f64 / Clock::HERTZ as f64)
+pub(crate) fn cpu_seconds(task: &LinuxTask<'_>) -> Option<f64> {
+    cpu_ticks(task).map(|ticks| ticks as f64 / Clock::HERTZ as f64)
 }
 
-/// The percentage of the time since `process` started that it has used the
-/// CPU (`UTILIZATION`), or 0 if it started at the snapshot. procps-ng
-/// multiplies the ticks by 100 as a `float`.
+/// The CPU time of `task` as a percentage of its process's lifetime
+/// (`UTILIZATION`), or 0 if the process started at the snapshot. Darwin
+/// reports no start time for a thread, so a thread's percentage is also of
+/// its process's lifetime. procps-ng multiplies the ticks by 100 as a
+/// `float`.
+pub(crate) fn utilization(context: &Context<'_>, task: &LinuxTask<'_>) -> Option<f64> {
+    Some(percentage_of_lifetime(
+        context,
+        task.process(),
+        cpu_ticks(task)?,
+    ))
+}
+
+/// The CPU time of `task`, plus the CPU time of its process's reaped
+/// children, as a percentage of the process's lifetime (`UTILIZATION_C`), or
+/// 0 if the process started at the snapshot.
+pub(crate) fn utilization_with_children(
+    context: &Context<'_>,
+    task: &LinuxTask<'_>,
+) -> Option<f64> {
+    Some(percentage_of_lifetime(
+        context,
+        task.process(),
+        cpu_ticks_with_children(task)?,
+    ))
+}
+
+/// `ticks` as a percentage of the time since `process` started, or 0 if it
+/// started at the snapshot.
 #[expect(
     clippy::cast_precision_loss,
     reason = "procps-ng converts the ticks to a float"
 )]
-pub(crate) fn utilization(context: &Context<'_>, process: &Process) -> Option<f64> {
-    let ticks = cpu_ticks(process)?;
+fn percentage_of_lifetime(context: &Context<'_>, process: &Process, ticks: u64) -> f64 {
     let running = running_ticks(context, process);
 
     if running > 0.0 {
-        Some(f64::from(ticks as f32 * 100.0) / running)
+        f64::from(ticks as f32 * 100.0) / running
     } else {
-        Some(0.0)
-    }
-}
-
-/// The percentage of the time since `process` started that it and its
-/// reaped children have used the CPU (`UTILIZATION_C`), or 0 if it started
-/// at the snapshot.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "procps-ng converts the ticks to a float"
-)]
-pub(crate) fn utilization_with_children(context: &Context<'_>, process: &Process) -> Option<f64> {
-    let ticks = cpu_ticks(process)? + children_ticks(process)?;
-    let running = running_ticks(context, process);
-
-    if running > 0.0 {
-        Some(f64::from(ticks as f32 * 100.0) / running)
-    } else {
-        Some(0.0)
+        0.0
     }
 }
 
@@ -445,12 +462,12 @@ fn children_ticks(process: &Process) -> Option<u64> {
     Some(Clock::ticks(resources.children_user_time) + Clock::ticks(resources.children_system_time))
 }
 
-/// The user CPU time of `process` and of its reaped children, in clock ticks
-/// (`TICS_USER_C`).
-pub(crate) fn user_ticks_with_children(process: &Process) -> Option<u64> {
-    let resources = process.usage.as_ref()?.resources.available()?;
+/// The user CPU time of `task` and of the reaped children of its process, in
+/// clock ticks (`TICS_USER_C`).
+pub(crate) fn user_ticks_with_children(task: &LinuxTask<'_>) -> Option<u64> {
+    let resources = task.process().usage.as_ref()?.resources.available()?;
 
-    Some(user_ticks(process)? + Clock::ticks(resources.children_user_time))
+    Some(user_ticks(task)? + Clock::ticks(resources.children_user_time))
 }
 
 /// The virtual and resident sizes of `process` in bytes. A zombie has no
@@ -464,12 +481,17 @@ pub(crate) fn sizes(process: &Process) -> Option<(u64, u64)> {
     (process.info.status == Status::Zombie).then_some((0, 0))
 }
 
-/// Darwin's count of the page-ins of `process`, which approximates Linux's
-/// count of the page faults that read from disk (`FLT_MAJ`). Darwin also
-/// counts a page-in for the first fault on a page that an earlier clustered
-/// read brought into memory.
-pub(crate) fn major_faults(process: &Process) -> Option<u64> {
-    let usage = process.usage.as_ref()?;
+/// Darwin's count of the page-ins of the process `task`, which approximates
+/// Linux's count of the page faults that read from disk (`FLT_MAJ`). Darwin
+/// also counts a page-in for the first fault on a page that an earlier
+/// clustered read brought into memory. Darwin reports no page faults for a
+/// thread, so a thread has no count.
+pub(crate) fn major_faults(task: &LinuxTask<'_>) -> Option<u64> {
+    if task.thread().is_some() {
+        return None;
+    }
+
+    let usage = task.process().usage.as_ref()?;
 
     usage
         .task
@@ -478,11 +500,15 @@ pub(crate) fn major_faults(process: &Process) -> Option<u64> {
         .or_else(|| usage.resources.available().map(|usage| usage.pageins))
 }
 
-/// Darwin's count of the page faults of `process` minus its page-ins, which
-/// approximates Linux's count of the faults that did not read from disk
-/// (`FLT_MIN`).
-pub(crate) fn minor_faults(process: &Process) -> Option<u64> {
-    task_info(process).map(|task| u64::from(task.faults.saturating_sub(task.pageins)))
+/// Darwin's count of the page faults of the process `task` minus its
+/// page-ins, which approximates Linux's count of the faults that did not read
+/// from disk (`FLT_MIN`). A thread has no count, as for [`major_faults`].
+pub(crate) fn minor_faults(task: &LinuxTask<'_>) -> Option<u64> {
+    if task.thread().is_some() {
+        return None;
+    }
+
+    task_info(task.process()).map(|task| u64::from(task.faults.saturating_sub(task.pageins)))
 }
 
 /// The scheduling class of `priority` as Linux numbers it (`SCHED_CLASS`):
@@ -704,10 +730,10 @@ impl Printer {
                 Cell::text(format!("{days_text}{hours_text}{minutes:02}:{seconds:02}"))
             }
             Self::Etimes => Cell::text(whole(elapsed(context, process)).to_string()),
-            Self::C => utilization_cell(utilization(context, process), |utilization| {
+            Self::C => utilization_cell(utilization(context, task), |utilization| {
                 format!("{:2}", whole(utilization).min(99))
             }),
-            Self::Pcpu => utilization_cell(utilization(context, process), |utilization| {
+            Self::Pcpu => utilization_cell(utilization(context, task), |utilization| {
                 let tenths = whole(utilization * 10.0);
 
                 if tenths > 999 {
@@ -716,19 +742,17 @@ impl Printer {
                     format!("{}.{}", tenths / 10, tenths % 10)
                 }
             }),
-            Self::Cp => utilization_cell(utilization(context, process), |utilization| {
+            Self::Cp => utilization_cell(utilization(context, task), |utilization| {
                 format!("{:3}", whole(utilization * 10.0).min(999))
             }),
-            Self::Utilization => {
-                utilization_cell(utilization(context, process), lifetime_percentage)
-            }
+            Self::Utilization => utilization_cell(utilization(context, task), lifetime_percentage),
             Self::UtilizationC => utilization_cell(
-                utilization_with_children(context, process),
+                utilization_with_children(context, task),
                 lifetime_percentage,
             ),
             Self::Pgid => Cell::text(info.pgid.as_raw().cast_unsigned().to_string()),
             Self::Ppid => Cell::text(info.ppid.as_raw().cast_unsigned().to_string()),
-            Self::Time => cpu_cell(process, |seconds| {
+            Self::Time => cpu_cell(task, |seconds| {
                 let (days, hours, minutes, seconds) = split(whole(seconds));
                 let days = if days > 0 {
                     format!("{days}-")
@@ -738,8 +762,8 @@ impl Printer {
 
                 format!("{days}{hours:02}:{minutes:02}:{seconds:02}")
             }),
-            Self::Times => cpu_cell(process, |seconds| whole(seconds).to_string()),
-            Self::Bsdtime => cpu_ticks(process).map_or_else(Cell::dash, |ticks| {
+            Self::Times => cpu_cell(task, |seconds| whole(seconds).to_string()),
+            Self::Bsdtime => cpu_ticks(task).map_or_else(Cell::dash, |ticks| {
                 let seconds = ticks / Clock::HERTZ;
 
                 Cell::text(format!("{:3}:{:02}", seconds / 60, seconds % 60))
@@ -818,19 +842,17 @@ impl Printer {
                 .data_and_stack
                 .and_then(|size| size.available().copied())
                 .map_or_else(Cell::dash, |size| Cell::text((size / 1024).to_string())),
-            Self::Majflt => major_faults(process)
-                .map_or_else(Cell::dash, |faults| Cell::text(faults.to_string())),
-            Self::Minflt => minor_faults(process)
-                .map_or_else(Cell::dash, |faults| Cell::text(faults.to_string())),
-            Self::Priority => priority_cell(process, |priority| priority),
-            Self::Opri => priority_cell(process, |priority| 60 + priority),
-            Self::PriFoo => priority_cell(process, |priority| priority - 20),
-            Self::PriBar => priority_cell(process, |priority| priority + 1),
-            Self::PriBaz => priority_cell(process, |priority| priority + 100),
-            Self::Pri => priority_cell(process, |priority| 39 - priority),
-            Self::PriApi => priority_cell(process, |priority| -1 - priority),
+            Self::Majflt => number_cell(major_faults(task)),
+            Self::Minflt => number_cell(minor_faults(task)),
+            Self::Priority => priority_cell(task, |priority| priority),
+            Self::Opri => priority_cell(task, |priority| 60 + priority),
+            Self::PriFoo => priority_cell(task, |priority| priority - 20),
+            Self::PriBar => priority_cell(task, |priority| priority + 1),
+            Self::PriBaz => priority_cell(task, |priority| priority + 100),
+            Self::Pri => priority_cell(task, |priority| 39 - priority),
+            Self::PriApi => priority_cell(task, |priority| -1 - priority),
             Self::Nice => {
-                let priority = process.linux_priority();
+                let priority = task.linux_priority();
 
                 if matches!(class_number(&priority), 0 | 3 | -1) {
                     Cell::text(priority.nice.to_string())
@@ -838,22 +860,22 @@ impl Printer {
                     Cell::dash()
                 }
             }
-            Self::Class => Cell::text(process.linux_priority().class()),
+            Self::Class => Cell::text(task.linux_priority().class()),
             Self::Rtprio => {
-                let priority = process.linux_priority();
+                let priority = task.linux_priority();
 
                 match (class_number(&priority), priority.rt_priority) {
                     (0 | -1, _) | (_, None) => Cell::dash(),
                     (_, Some(rt_priority)) => Cell::text(rt_priority.to_string()),
                 }
             }
-            Self::Sched => match class_number(&process.linux_priority()) {
+            Self::Sched => match class_number(&task.linux_priority()) {
                 -1 => Cell::dash(),
                 class => Cell::text(class.to_string()),
             },
             Self::Tty4 => Cell::text(terminal(process, true)),
             Self::Tty8 => Cell::text(terminal(process, false)),
-            Self::Stat => Cell::text(process.linux_state().to_string()),
+            Self::Stat => Cell::text(task.linux_state().to_string()),
             Self::S => Cell::text(task.state_letter().unwrap_or('-').to_string()),
             Self::SgiP => match task.state_letter() {
                 Some('R') | None => Cell::dash(),
@@ -1198,9 +1220,9 @@ fn join_groups(process: &Process, mut write: impl FnMut(u32) -> Vec<u8>) -> Vec<
         .join(&b","[..])
 }
 
-/// The CPU time of `process` in seconds, formatted by `format`, or `-`.
-fn cpu_cell(process: &Process, format: impl FnOnce(f64) -> String) -> Cell {
-    cpu_seconds(process).map_or_else(Cell::dash, |seconds| Cell::text(format(seconds)))
+/// The CPU time of `task` in seconds, formatted by `format`, or `-`.
+fn cpu_cell(task: &LinuxTask<'_>, format: impl FnOnce(f64) -> String) -> Cell {
+    cpu_seconds(task).map_or_else(Cell::dash, |seconds| Cell::text(format(seconds)))
 }
 
 /// A value computed by `value` from the virtual and resident sizes of
@@ -1209,10 +1231,9 @@ fn size_cell(process: &Process, value: impl FnOnce((u64, u64)) -> u64) -> Cell {
     sizes(process).map_or_else(Cell::dash, |sizes| Cell::text(value(sizes).to_string()))
 }
 
-/// A priority computed by `value` from Linux's `priority` field of
-/// `process`.
-fn priority_cell(process: &Process, value: impl FnOnce(i32) -> i32) -> Cell {
-    Cell::text(value(process.linux_priority().priority).to_string())
+/// A priority computed by `value` from Linux's `priority` field of `task`.
+fn priority_cell(task: &LinuxTask<'_>, value: impl FnOnce(i32) -> i32) -> Cell {
+    Cell::text(value(task.linux_priority().priority).to_string())
 }
 
 /// Whether the virtual size of `process` is 0, as it is for a zombie.

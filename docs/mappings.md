@@ -764,11 +764,13 @@ the tools follow `iconv`.
 
 ## Threads
 
-With `-w`, procps-ng's `pgrep` selects and lists each thread of a process. Linux
-calls each thread a task. `pgrep` lists Darwin's threads in place of Linux's, in
-ascending order of thread ID within each process. The thread IDs come from
-`proc_pidinfo` with `PROC_PIDLISTTHREADIDS`, and each thread's name and run
-state from `pth_name` and `pth_run_state` of `PROC_PIDTHREADID64INFO`.
+With `-w`, procps-ng's `pgrep` selects and lists each thread of a process, and
+`ps` lists threads with `-L`, `-T`, `H`, `m` and `-m`. Linux calls each thread a
+task. The tools list Darwin's threads in place of Linux's, in ascending order of
+thread ID within each process. The thread IDs come from `proc_pidinfo` with
+`PROC_PIDLISTTHREADIDS`, and each thread's name, run state, CPU time, scheduling
+policy and priority from `pth_name`, `pth_run_state`, `pth_user_time`,
+`pth_system_time`, `pth_policy` and `pth_priority` of `PROC_PIDTHREADID64INFO`.
 
 - A thread's ID is its 64-bit Darwin thread ID, which is unique among threads. A
   Linux thread ID is a pid, and the main thread's ID equals the process ID, so
@@ -807,12 +809,49 @@ state from `pth_name` and `pth_run_state` of `PROC_PIDTHREADID64INFO`.
   main threads of those processes. The tools leave out the main thread of each
   ancestor too, and every thread of their own process. procps-ng's `pgrep` has
   one thread, so on Linux the tool has no other thread to leave out.
+- `ps` shows a thread's ID in the `lwp`, `tid` and `spid` columns. Darwin's
+  thread IDs usually have more digits than these columns, which are as wide as
+  the largest pid, so an ID moves the rest of the row to the right, as procps-ng
+  moves it for any value that is wider than its column. On Linux, the main
+  thread's row shows the process ID in these columns.
+- A thread's row in `ps` shows the thread's own state, CPU time, scheduling
+  policy and priority, as Linux shows them from `/proc/<pid>/task/<tid>`. The
+  `stat` column adds modifiers computed from the process to the thread's letter.
+  On Linux, each thread has its own nice value, which decides the `<` and `N`
+  modifiers of its row. Darwin keeps one nice value for each process, so every
+  thread has its process's nice value and modifiers, and its priority on Linux's
+  scale for `SCHED_OTHER` is 20 plus that value. A thread with Darwin's
+  round-robin or FIFO policy has its base priority as its real-time priority,
+  limited to 1 to 99, as a process has. Darwin reports no page faults for a
+  thread, so `maj_flt` and `min_flt` show `-` in a thread's row.
+- With `m` or `-m`, procps-ng 4.0.7 prints a process's row again and again, and
+  never finishes the listing, when the first task that the selection selects is
+  not the main thread. This happens, for example, with `-C` and the name of
+  another thread, or with `r` when only a later thread runs. The loop of thread
+  rows in `simple_spew` starts at the selected task and compares the task's
+  thread ID with its process ID before it moves on. The two differ, so the loop
+  ends at once, and the selection checks the same task again. `ps` deliberately
+  prints the process's row once, and then a row for that thread and for each
+  later thread of the process.
+- With rows of threads, repetitions of a pid next to each other in `-q` give one
+  listing of the process's threads, because procps-ng's `simple_nexttid` reads
+  the threads of a process again only after another process. Another process
+  that exists between the repetitions makes procps-ng list the threads again.
+  For a list such as `A,X,A`, where X does not exist, procps-ng 4.0.7 crashes
+  with `SIGSEGV`: the failed opening of X's `task` directory sets `taskdir` to
+  `NULL`, but leaves `taskdir_user` set to A, so the second A calls
+  `readdir(NULL)`. `ps` deliberately lists A's threads once.
+- Darwin reports no start time for a thread, so the start columns, the elapsed
+  time and the `%cpu`, `c` and `cp` columns of a thread's row use its process's
+  start time. On Linux, each thread has its own start time.
 - When the tools cannot read the threads of a process, or the process has none,
   they list the process as one task whose ID is the pid, as a single-threaded
   process is on Linux. Without root or the helper, Darwin refuses
   `PROC_PIDLISTTHREADIDS` for another user's process, so `pgrep -w` lists each
-  such process once, by its pid, and `pgrep -w -c` counts it once. The output of
-  `pgrep -w` can therefore mix pids and Darwin thread IDs. With procfs's default
+  such process once, by its pid, and `pgrep -w -c` counts it once. `ps -L`
+  likewise shows one row for such a process, with the pid in the `lwp` column
+  and the process's values in the other columns. The output of `pgrep -w` and
+  `ps -L` can therefore mix pids and Darwin thread IDs. With procfs's default
   permissions, procps-ng lists every thread, because every user can read
   `/proc/<pid>/task`, although a mount option such as `hidepid` can withhold
   other users' processes. The helper reads the threads of every process.
