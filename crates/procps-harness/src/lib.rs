@@ -17,6 +17,7 @@ mod fixture;
 mod host;
 mod outcome;
 mod pids;
+mod programs;
 mod runner;
 mod scenario;
 mod session;

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{path::PathBuf, process::ExitStatus, time::Duration};
+use std::{path::PathBuf, process::ExitStatus, sync::Arc, time::Duration};
 
 use crate::{FixtureEnd, FixtureState, Outcome, Stream};
 
@@ -51,7 +51,8 @@ pub enum Error {
     /// A fixture process could not be started or waited for.
     #[error("fixture {name:?}: {source}")]
     Fixture {
-        /// The fixture's name in the scenario.
+        /// The fixture's name in the scenario, or the process name when the
+        /// runner prepares a program.
         name: String,
         /// The underlying error.
         source: std::io::Error,
@@ -59,7 +60,8 @@ pub enum Error {
     /// A fixture process exited before it reported that it was ready.
     #[error("fixture {name:?} wrote {output:?} and exited with {status} before it was ready")]
     FixtureNotReady {
-        /// The fixture's name in the scenario.
+        /// The fixture's name in the scenario, or the process name when the
+        /// runner prepares a program.
         name: String,
         /// What the fixture wrote to standard output.
         output: String,
@@ -72,7 +74,8 @@ pub enum Error {
         "fixture {name:?} was not ready within {after:?}; it {state}, and it had written {output:?}"
     )]
     FixtureNotReadyInTime {
-        /// The fixture's name in the scenario.
+        /// The fixture's name in the scenario, or the process name when the
+        /// runner prepares a program.
         name: String,
         /// How long the runner waited.
         after: Duration,
@@ -88,6 +91,17 @@ pub enum Error {
         name: String,
         /// The raw wait status.
         status: i32,
+    },
+    /// The runner could not prepare the program for a process name before the
+    /// program's first use, so no run of the runner or its clones can start the
+    /// program.
+    #[error("cannot prepare {}: {source}", program.display())]
+    ProgramNotReady {
+        /// The program.
+        program: PathBuf,
+        /// Why the preparation failed. Every run that needs the program
+        /// returns the same error.
+        source: Arc<Error>,
     },
     /// A golden file contains a fixture state that the harness does not
     /// know.
