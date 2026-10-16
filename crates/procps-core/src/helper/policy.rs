@@ -16,7 +16,8 @@ use crate::{Field, Process, ProcessSource, Snapshot, SnapshotRequest, SourceErro
 ///
 /// - the environment, as in `/proc/<pid>/environ`;
 /// - the working directory, as in `/proc/<pid>/cwd`;
-/// - the file descriptors, as in `/proc/<pid>/fd`;
+/// - the file descriptors, as in `/proc/<pid>/fd`, but not their number, which
+///   Linux shows every user as the size of that directory;
 /// - the disk I/O counters, as in `/proc/<pid>/io`;
 /// - the instruction, cycle and energy counters, which Linux does not show per
 ///   process;

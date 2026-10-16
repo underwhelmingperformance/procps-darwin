@@ -33,8 +33,9 @@ const fn outcome<T>(field: &Field<T>) -> &'static str {
 
 /// The outcome of each optional group of `process`, in [`FieldGroup::ALL`]
 /// order: `None` for a group that the source did not read. The usage group
-/// has the outcomes of its three fields, and the regions group the outcomes of
-/// the totals and the regions, separated by slashes.
+/// has the outcomes of its three fields, the regions group the outcomes of
+/// the totals and the regions, and the descriptors group the outcomes of the
+/// count and the descriptors, separated by slashes.
 fn outcomes(process: &Process) -> [Option<String>; 7] {
     fn one<T>(field: Option<&Field<T>>) -> Option<String> {
         field.map(|field| outcome(field).to_owned())
@@ -59,7 +60,13 @@ fn outcomes(process: &Process) -> [Option<String>; 7] {
             (None, None) => None,
             (totals, regions) => Some(format!("{totals:?} with {regions:?}")),
         },
-        one(process.file_descriptors.as_ref()),
+        match (&process.file_descriptor_count, &process.file_descriptors) {
+            (Some(count), Some(descriptors)) => {
+                Some(format!("{}/{}", outcome(count), outcome(descriptors)))
+            }
+            (None, None) => None,
+            (count, descriptors) => Some(format!("{count:?} with {descriptors:?}")),
+        },
         one(process.working_directory.as_ref()),
     ]
 }
@@ -69,6 +76,7 @@ fn every_group(kind: &str) -> [Option<String>; 7] {
     let mut groups = [(); 7].map(|()| Some(kind.to_owned()));
     groups[2] = Some(format!("{kind}/{kind}/{kind}"));
     groups[4] = Some(format!("{kind}/{kind}"));
+    groups[5] = Some(format!("{kind}/{kind}"));
     groups
 }
 
@@ -96,11 +104,11 @@ fn fixture_process(pid: i32) -> Result<Process, darwin_proc::Error> {
             counters: Field::Denied,
         }),
         threads: Some(Field::Available(Vec::new())),
-        file_descriptors: Some(Field::Available(vec![0, 1, 2])),
         working_directory: Some(Field::Available(PathBuf::from("/"))),
         ..Process::from_identity(info, Field::Unsupported, Field::Available(Pid::from(pid)))
     }
-    .with_regions(Field::Unsupported))
+    .with_regions(Field::Unsupported)
+    .with_file_descriptors(Field::Available(vec![0, 1, 2])))
 }
 
 #[test]
@@ -154,6 +162,30 @@ fn a_fixture_leaves_out_the_groups_that_the_request_did_not_ask_for()
             None,
         ]]
     );
+
+    Ok(())
+}
+
+#[test]
+fn a_fixture_counts_descriptors_that_have_no_count() -> Result<(), Box<dyn std::error::Error>> {
+    let process = Process {
+        file_descriptors: Some(Field::Available(vec![0, 1, 2, 7])),
+        ..Process::from_identity(
+            Pid::current().info()?,
+            Field::Unsupported,
+            Field::Unsupported,
+        )
+    };
+    let source = FixtureSource::new(SystemTime::UNIX_EPOCH, Duration::ZERO, vec![process]);
+    let request = SnapshotRequest::default().with(FieldGroup::FileDescriptors);
+    let counts: Vec<_> = source
+        .snapshot(&request)?
+        .processes
+        .into_iter()
+        .map(|process| process.file_descriptor_count)
+        .collect();
+
+    assert_eq!(counts, vec![Some(Field::Available(4))]);
 
     Ok(())
 }

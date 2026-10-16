@@ -64,6 +64,33 @@ fn process(
     Ok(process)
 }
 
+// Linux lets every user read the size of `/proc/<pid>/fd`, which is the
+// number of open descriptors, and only the owner list the descriptors.
+#[test]
+fn every_user_reads_the_number_of_descriptors() -> Result<(), Box<dyn std::error::Error>> {
+    let process = process([OWNER; 3], [GROUP; 3], false)?;
+    let count = process.file_descriptor_count;
+    let redacted =
+        caller(OWNER + 1).redact(snapshot(vec![process.clone()]), &later(vec![process]))?;
+    let fields: Vec<_> = redacted
+        .processes
+        .into_iter()
+        .map(|process| (process.file_descriptors, process.file_descriptor_count))
+        .collect();
+
+    assert_eq!(
+        (
+            fields,
+            count
+                .as_ref()
+                .is_some_and(|count| count.available().is_some())
+        ),
+        (vec![(Some(Field::Denied), count)], true)
+    );
+
+    Ok(())
+}
+
 /// `process` without the values that only its owner and root may read.
 fn withheld(process: Process) -> Process {
     Process {

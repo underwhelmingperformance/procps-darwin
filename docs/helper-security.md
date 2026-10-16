@@ -69,11 +69,15 @@ place of the rules that macOS applies.
 
 - Every user can read every process's identity, command line, state, CPU times,
   memory sizes, faults, threads and their names, scheduling data, signal masks,
-  system call and Mach message counts, wakeups, and the code and data sizes that
-  the helper totals from the process's memory regions. macOS withholds all of
-  these from other users except the identity, state, scheduling data and signal
-  masks, so installing the helper discloses the rest, as Linux does. A password
-  passed as a command-line argument becomes visible to every local user.
+  system call and Mach message counts, wakeups, the number of open file
+  descriptors, and the code and data sizes that the helper totals from the
+  process's memory regions. macOS withholds all of these from other users except
+  the identity, state, scheduling data and signal masks, so installing the
+  helper discloses the rest, as Linux does. A password passed as a command-line
+  argument becomes visible to every local user. Another user learns the number
+  of a process's open descriptors and how that number changes, but not the
+  targets or the types of the descriptors. Linux 6.2 and later disclose the same
+  number to every user as the size of `/proc/<pid>/fd`.
 - A process's private values are its environment, working directory, file
   descriptors, memory regions, disk I/O counts, and instruction, cycle and
   energy counters. Root can read them. Another user can read them only if their
@@ -88,7 +92,7 @@ The helper reads the private values of every process in the request, then
 replaces each value that the client may not read with a marker that the tools
 show as `-`. The withheld values never leave the helper. The time that the
 helper takes to answer still depends on them, so a client can estimate, for
-example, how many file descriptors another user's process has open.
+example, how many memory regions another user's process has.
 
 The helper has no equivalent of `hidepid`. An administrator who wants other
 users' processes hidden should not install the helper.

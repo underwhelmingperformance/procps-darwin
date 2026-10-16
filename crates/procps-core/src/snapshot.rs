@@ -61,8 +61,14 @@ pub struct Process {
     /// process's owner and to root. [`Process::with_regions`] sets them
     /// together with their totals.
     pub regions: Option<Field<Vec<Region>>>,
-    /// The open file descriptors, in ascending order.
+    /// The open file descriptors, in ascending order. The helper sends them
+    /// only to the process's owner and to root.
+    /// [`Process::with_file_descriptors`] sets them together with their
+    /// number.
     pub file_descriptors: Option<Field<Vec<RawFd>>>,
+    /// The number of open file descriptors. The helper sends it to every
+    /// user, as Linux shows every user the size of `/proc/<pid>/fd`.
+    pub file_descriptor_count: Option<Field<usize>>,
     /// The working directory.
     #[serde(with = "path_field::optional")]
     pub working_directory: Option<Field<PathBuf>>,
@@ -99,6 +105,7 @@ impl Process {
             region_totals: None,
             regions: None,
             file_descriptors: None,
+            file_descriptor_count: None,
             working_directory: None,
         }
     }
@@ -107,7 +114,8 @@ impl Process {
 impl Process {
     /// This process with exactly the groups that `request` asks for. A
     /// requested group that the process lacks is unsupported. A process with
-    /// regions but no region totals gets the totals of its regions.
+    /// regions but no region totals gets the totals of its regions, and one
+    /// with descriptors but no count gets the number of its descriptors.
     pub(crate) fn limited_to(self, request: &SnapshotRequest) -> Self {
         fn group<T>(value: Option<T>, wanted: bool, missing: T) -> Option<T> {
             wanted.then(|| value.unwrap_or(missing))
@@ -120,6 +128,11 @@ impl Process {
                     .as_ref()
                     .map(|regions| RegionTotals::from(regions.as_slice()))
             })
+        });
+        let file_descriptor_count = self.file_descriptor_count.or_else(|| {
+            self.file_descriptors
+                .as_ref()
+                .map(|descriptors| descriptors.as_ref().map(Vec::len))
         });
         let unsupported = Usage {
             task: Field::Unsupported,
@@ -148,6 +161,11 @@ impl Process {
             regions: group(self.regions, wants(FieldGroup::Regions), Field::Unsupported),
             file_descriptors: group(
                 self.file_descriptors,
+                wants(FieldGroup::FileDescriptors),
+                Field::Unsupported,
+            ),
+            file_descriptor_count: group(
+                file_descriptor_count,
                 wants(FieldGroup::FileDescriptors),
                 Field::Unsupported,
             ),
@@ -190,6 +208,28 @@ impl Process {
                     .map(|regions| RegionTotals::from(regions.as_slice())),
             ),
             regions: Some(regions),
+            ..self
+        }
+    }
+
+    /// This process with `descriptors` and their number.
+    ///
+    /// ```
+    /// use darwin_proc::Pid;
+    /// use procps_core::{Field, Process};
+    ///
+    /// let info = Pid::current().info()?;
+    /// let process = Process::from_identity(info, Field::Unsupported, Field::Unsupported)
+    ///     .with_file_descriptors(Field::Available(vec![0, 1, 2]));
+    ///
+    /// assert_eq!(process.file_descriptor_count, Some(Field::Available(3)));
+    /// # Ok::<(), darwin_proc::Error>(())
+    /// ```
+    #[must_use]
+    pub fn with_file_descriptors(self, descriptors: Field<Vec<RawFd>>) -> Self {
+        Self {
+            file_descriptor_count: Some(descriptors.as_ref().map(Vec::len)),
+            file_descriptors: Some(descriptors),
             ..self
         }
     }
