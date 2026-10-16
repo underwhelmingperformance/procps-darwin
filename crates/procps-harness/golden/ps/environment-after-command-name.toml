@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+COMMAND
+harness-alpha HARNESS_A=one HARNESS_B=two
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

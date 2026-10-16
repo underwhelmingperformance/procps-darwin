@@ -50,7 +50,6 @@ pub(crate) struct Invocation {
 /// The first part of `options` that this project does not implement yet.
 fn unimplemented(options: &Options) -> Option<Unimplemented> {
     let modifiers = [
-        (Modifiers::ENVIRONMENT, "e"),
         (Modifiers::CUMULATIVE, "S"),
         (Modifiers::SIGNAL_NAMES, "--signames"),
     ];
@@ -1126,7 +1125,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::environment(&["e"], Unimplemented::Option("e"))]
     #[case::cumulative(&["S"], Unimplemented::Option("S"))]
     #[case::signal_names(&["--signames"], Unimplemented::Option("--signames"))]
     fn a_part_that_is_not_implemented_yet_is_an_error(
@@ -1161,6 +1159,13 @@ mod tests {
     #[case::sort_key(&["-o", "pid", "--sort", "cmd"], SnapshotRequest::default().with(FieldGroup::Arguments))]
     #[case::running(&["r", "-o", "pid"], SnapshotRequest::default().with(FieldGroup::Threads))]
     #[case::environment(&["-o", "environ"], SnapshotRequest::default().with(FieldGroup::Environment))]
+    #[case::command_line_and_environment(
+        &["e", "-o", "args"],
+        SnapshotRequest::default().with(FieldGroup::Arguments).with(FieldGroup::Environment)
+    )]
+    #[case::command_name_and_environment(&["e", "-o", "comm"], SnapshotRequest::default().with(FieldGroup::Environment))]
+    #[case::command_names_and_environment(&["ec", "-o", "args"], SnapshotRequest::default().with(FieldGroup::Environment))]
+    #[case::environment_without_a_command(&["e", "-o", "pid"], SnapshotRequest::default())]
     #[case::descriptors(
         &["-o", "fds"],
         SnapshotRequest::default().with(FieldGroup::FileDescriptors)

@@ -657,11 +657,22 @@ impl Printer {
     pub(crate) fn groups(self, modifiers: Modifiers) -> &'static [FieldGroup] {
         use FieldGroup::{Arguments, Environment, FileDescriptors, Regions, Threads, Usage};
 
+        let command_line = match self {
+            Self::Args => !modifiers.contains(Modifiers::COMMAND_NAMES),
+            Self::Comm => modifiers.contains(Modifiers::FULL),
+            _ => false,
+        };
+        let environment = modifiers.contains(Modifiers::ENVIRONMENT);
+
         match self {
-            Self::Args if !modifiers.contains(Modifiers::COMMAND_NAMES) => &[Arguments],
+            Self::Args | Self::Comm => match (command_line, environment) {
+                (true, true) => &[Arguments, Environment],
+                (true, false) => &[Arguments],
+                (false, true) => &[Environment],
+                (false, false) => &[],
+            },
             Self::Environ => &[Environment],
             Self::Fds => &[FileDescriptors],
-            Self::Comm if modifiers.contains(Modifiers::FULL) => &[Arguments],
             Self::Stat | Self::S | Self::SgiP => &[Threads],
             Self::Bsdtime
             | Self::C
@@ -1072,37 +1083,70 @@ impl Printer {
 
 /// The command name, or the command line, as procps-ng's
 /// `pr_cmd_or_cmdline` prints it, after the prefix of a process tree. A
-/// zombie's name is followed by ` <defunct>`.
+/// zombie's name is followed by ` <defunct>`. With BSD's `e`, the
+/// environment follows, after a space, if the column has more than one cell
+/// left and the environment is not `-`.
 fn command_or_command_line(
     context: &Context<'_>,
     task: &LinuxTask<'_>,
     command_line: bool,
     room: Room,
 ) -> Cell {
-    let utf8 = context.utf8();
     let text = if command_line {
         task.command_line(context.charset)
     } else {
         task.command(context.charset)
     };
-    let mut bytes = context.forest_text(room.cells);
-    let mut rightward = room.cells - bytes.len();
-    let mut append = |bytes: &mut Vec<u8>, text: &[u8]| {
-        let escaped = escape::escape(text, utf8, rightward, OUTBUF_SIZE - bytes.len());
-
-        bytes.extend(escaped.bytes);
-        rightward -= escaped.cells;
+    let prefix = context.forest_text(room.cells);
+    let mut line = Line {
+        rightward: room.cells - prefix.len(),
+        bytes: prefix,
+        utf8: context.utf8(),
     };
 
-    append(&mut bytes, text.as_bytes());
+    line.escape(text.as_bytes());
 
     if !command_line && task.state_letter() == Some('Z') {
-        append(&mut bytes, b" <defunct>");
+        line.escape(b" <defunct>");
+    }
+
+    if context.modifiers.contains(Modifiers::ENVIRONMENT) && line.rightward > 1 {
+        let environment = task.process().linux_environment_line(context.charset);
+
+        if environment != "-" {
+            line.bytes.push(b' ');
+            line.rightward -= 1;
+            line.escape(environment.as_bytes());
+        }
     }
 
     Cell {
-        bytes,
-        amount: i64::try_from(room.cells - rightward).unwrap_or(i64::MAX),
+        amount: i64::try_from(room.cells - line.rightward).unwrap_or(i64::MAX),
+        bytes: line.bytes,
+    }
+}
+
+/// A column's text as procps-ng builds it in its output buffer, with the
+/// cells that the column has left (`rightward`).
+struct Line {
+    bytes: Vec<u8>,
+    rightward: usize,
+    utf8: bool,
+}
+
+impl Line {
+    /// Appends `text`, escaped and cut to the cells that are left, as
+    /// procps-ng's `escape_str` does.
+    fn escape(&mut self, text: &[u8]) {
+        let escaped = escape::escape(
+            text,
+            self.utf8,
+            self.rightward,
+            OUTBUF_SIZE - self.bytes.len(),
+        );
+
+        self.bytes.extend(escaped.bytes);
+        self.rightward -= escaped.cells;
     }
 }
 
@@ -2396,6 +2440,27 @@ pub(crate) mod tests {
                 "501".to_owned(),
                 "20".to_owned()
             )
+        );
+    }
+
+    // procps-ng appends the environment only when the column has more than
+    // one cell left after the command, and leaves out an environment that it
+    // could not read.
+    #[rstest]
+    #[case::command_line("args", with_private_values(), 1_000, Cell::text(*b"sleep 100 HOME=/ TERM=vt100"))]
+    #[case::command_name("comm", with_private_values(), 1_000, Cell::text(*b"sleep HOME=/ TERM=vt100"))]
+    #[case::cut("args", with_private_values(), 12, Cell::text(*b"sleep 100 HO"))]
+    #[case::one_cell_left("args", with_private_values(), 10, Cell { bytes: b"sleep 100".to_vec(), amount: 9 })]
+    #[case::unreadable("args", sleeper(), 1_000, Cell::text(*b"sleep 100"))]
+    fn the_environment_follows_the_command(
+        #[case] name: &str,
+        #[case] process: Process,
+        #[case] cells: usize,
+        #[case] expected: Cell,
+    ) {
+        assert_eq!(
+            printed(name, process, cells, settings(Modifiers::ENVIRONMENT)),
+            expected
         );
     }
 

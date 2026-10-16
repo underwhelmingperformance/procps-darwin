@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "e cuts the environment to the room of a column that is not the last"
+command = ["ps", "e", "-o", "comm:20,pid", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+environment = { HARNESS_A = "one", HARNESS_B = "two" }

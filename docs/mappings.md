@@ -258,14 +258,19 @@ can read the command line of every process apart from `kernel_task`.
 
 ## Environment
 
-`pgrep --env` and `ps`'s `environ` column read each process's environment from
-`KERN_PROCARGS2`. `environ` joins the variables with spaces, as procps-ng joins
-the strings of `/proc/<pid>/environ`. macOS 27 withholds the environment of an
-Apple platform binary, such as `/bin/sleep` or `/bin/sh`, from every process
-except the binary itself, and the tools treat that environment as unreadable.
-`pgrep --env` therefore never selects a platform binary on macOS 27, and
-`environ` shows `-` for it. On Linux, a process's owner can read its environment
-from `/proc/<pid>/environ`, so procps-ng selects it and shows it.
+`pgrep --env`, `ps`'s `environ` column and `ps`'s BSD option `e` read each
+process's environment from `KERN_PROCARGS2`. `environ` joins the variables with
+spaces, as procps-ng joins the strings of `/proc/<pid>/environ`, and `e` adds
+the same text after the command. On the macOS 27 systems that this project
+tested, with System Integrity Protection enabled, `KERN_PROCARGS2` returned no
+environment for an Apple platform binary, such as `/bin/sleep` or `/bin/sh`,
+when another process read it. XNU withholds the environment of a restricted
+process, with exceptions such as the process itself and a caller with a private
+entitlement. The tools treat a withheld environment as unreadable, so on such a
+system `pgrep --env` does not select these binaries, `environ` shows `-` for
+them, and `e` adds nothing after their commands. On Linux, a process's owner can
+read its environment from `/proc/<pid>/environ`, so procps-ng selects it and
+shows it.
 
 ## Groups
 
