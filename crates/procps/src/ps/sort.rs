@@ -222,6 +222,12 @@ impl Item {
         match self {
             Self::Cmd => Value::Text(task.command(context.charset()).as_bytes().to_vec()),
             Self::Exe => Value::Text(print::executable(context, process)),
+            Self::AddrCurrEip | Self::AddrCurrEsp => Value::Unsigned(0),
+            // Linux's start of a stack that `ps` may read is an address above
+            // 0, so the unknown starts sort after the zeros, as on Linux.
+            Self::AddrStackStart => {
+                Value::Unsigned(print::stack_start(context, process).unwrap_or(u64::MAX))
+            }
             Self::IoReadBytes => {
                 unsigned(print::counters(process).map(|counters| counters.disk_bytes_read))
             }
@@ -332,9 +338,6 @@ impl Item {
             // only procps-ng's placeholders sort by.
             Self::AddrCodeEnd
             | Self::AddrCodeStart
-            | Self::AddrCurrEip
-            | Self::AddrCurrEsp
-            | Self::AddrStackStart
             | Self::AutogrpId
             | Self::AutogrpNice
             | Self::CapsPermitted
@@ -751,6 +754,35 @@ mod tests {
                 },
             ),
         ]
+    }
+
+    // Linux reports the start of the stack as 0 to a caller that may not read
+    // the process, and as a non-zero address for a readable process with
+    // memory, so procps-ng sorts the zeros first. `ps` does not know the start
+    // for a readable process, and sorts those processes after the zeros, equal
+    // to each other.
+    #[rstest]
+    #[case::ascending(Order::Ascending, [10, 20, 30])]
+    #[case::descending(Order::Descending, [20, 30, 10])]
+    fn the_start_of_the_stack_sorts_as_procps_ng_sorts_it(
+        #[case] order: Order,
+        #[case] expected: [i32; 3],
+    ) {
+        let mut stranger = process(10, "other");
+        stranger.info.credentials.euid = Uid::from(502);
+        let settings = Settings {
+            caller: Caller::new(Uid::from(501), Gid::from(20)),
+            ..settings(Modifiers::empty())
+        };
+
+        assert_eq!(
+            sorted_for(
+                vec![process(20, "own"), stranger, process(30, "own")],
+                key("stackp", order),
+                settings
+            ),
+            expected
+        );
     }
 
     // `exe` shows `-` for every process here, so sorting by the hidden paths
