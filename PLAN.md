@@ -225,9 +225,9 @@ Each process record has its identity, which a source always reads, and field
 groups: arguments, environment, usage (CPU time, memory and I/O), threads,
 memory regions, file descriptors and working directory. Every value apart from
 the `kinfo_proc` record is a `Field<T>`, or for the usage group three of them
-and for the regions group two. A `Field<T>` is available, denied, unsupported on
-macOS for that process, or failed for another reason. The formatter decides how
-each case is shown, following the compatibility rules.
+and for the regions and descriptors groups two each. A `Field<T>` is available,
+denied, unsupported on macOS for that process, or failed for another reason. The
+formatter decides how each case is shown, following the compatibility rules.
 
 A `SnapshotRequest` lists the field groups that the caller needs.
 `ps -o pid,comm` therefore never reads arguments or walks memory regions, and
@@ -280,9 +280,11 @@ whichever is later, but not while a snapshot is running.
 The access policy follows Linux procfs defaults (no `hidepid`):
 
 - Any user may read identity, command line, state, CPU times, memory sizes and
-  page faults, thread lists, scheduling parameters, signal masks, and the text,
-  data and shared sizes. Linux exposes these through `/proc/<pid>/stat`,
-  `status`, `cmdline` and `statm`, which every user can read.
+  page faults, thread lists, scheduling parameters, signal masks, the text, data
+  and shared sizes, and the number of open file descriptors. Linux exposes these
+  through `/proc/<pid>/stat`, `status`, `cmdline` and `statm`, which every user
+  can read, and the number of descriptors as the size of `/proc/<pid>/fd`, which
+  every user can read with `stat`.
 - Only root, or a caller whose user ID equals the target's real, effective and
   saved user IDs and whose group ID equals the target's real, effective and
   saved group IDs, while the target does not have `P_SUGID` set, may read the
@@ -637,6 +639,11 @@ the running time, corresponds to `sum_exec_runtime` plus `run_delay` in
 and faults in `status` and `stat`. The CPU times of the children that the
 process has reaped correspond to `cutime` and `cstime` in `stat`. The wakeups
 have no Linux counterpart, and reveal no more than the CPU time.
+
+The helper withholds the list of open file descriptors, because Linux lets only
+the owner list `/proc/<pid>/fd`. It sends their number to every user. Linux 6.2
+and later report the number as the size of that directory, which `stat` returns
+to every user, and procps-ng's `fds` column reads it there.
 
 The memory regions go only to the owner and root, as `maps` and `smaps_rollup`
 do on Linux. `RegionTotals` goes to every user, as the text and data sizes in
@@ -1513,8 +1520,8 @@ policy. Task 0.1 may move individual specifiers between groups.
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Any user: `kinfo_proc`, `proc_pidpath`, `getsid`                 | `pid`, `tgid`, `ppid`, `pgid`, `pgrp`, `sid`, `sess`, `tpgid`, `tty`, `tt`, `tname`, `uid`, `euid`, `ruid`, `suid`, `svuid`, `user`, `euser`, `ruser`, `suser`, `uname`, `gid`, `egid`, `rgid`, `sgid`, `svgid`, `group`, `egroup`, `rgroup`, `sgroup`, `supgid`, `supgrp`, `ni`, `nice`, `start`, `stime`, `lstart`, `bsdstart`, `start_time`, `etime`, `etimes`, `comm`, `ucmd`, `ucomm`, `fname`, `exe`, `caught`, `sigcatch`, `ignored`, `sigignore`, `pending`, `sig`, `f`, `flag`, `flags` |
 | Any user, approximated: effective IDs in place of filesystem IDs | `fuid`, `fuser`, `fgid`, `fgroup`                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Helper: task info, rusage, threads, arguments                    | `args`, `cmd`, `command`, `%cpu`, `pcpu`, `c`, `cp`, `cuc`, `cuu`, `time`, `cputime`, `cputimes`, `times`, `bsdtime`, `%mem`, `pmem`, `rss`, `rssize`, `rsz`, `vsz`, `vsize`, `maj_flt`, `min_flt`, `nlwp`, `thcount`, `lwp`, `tid`, `spid`, `pri`, `rtprio`, `policy`, `class`, `cls`, `sched`, `blocked`, `sigmask`, and the full `stat`, `s` and `state`                                                                                                                                      |
-| Helper, owner                                                    | `environ`, `fds`, `rbytes`, `wbytes`                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Helper: task info, rusage, threads, arguments, descriptor count  | `args`, `cmd`, `command`, `%cpu`, `pcpu`, `c`, `cp`, `cuc`, `cuu`, `time`, `cputime`, `cputimes`, `times`, `bsdtime`, `%mem`, `pmem`, `rss`, `rssize`, `rsz`, `vsz`, `vsize`, `maj_flt`, `min_flt`, `nlwp`, `thcount`, `lwp`, `tid`, `spid`, `pri`, `rtprio`, `policy`, `class`, `cls`, `sched`, `blocked`, `sigmask`, and the full `stat`, `s` and `state`, `fds`                                                                                                                               |
+| Helper, owner                                                    | `environ`, `rbytes`, `wbytes`                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Helper: memory region walk                                       | `drs`, `trs`, `size`, `sz`                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Helper, owner: memory region walk                                | `uss`, `pss` (if approximated)                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Not applicable: shows `-`                                        | `ag_id`, `ag_nice`, `cgname`, `cgroup`, `cgroupns`, `docker`, `ipcns`, `label`, `lsession`, `luid`, `lxc`, `machine`, `mntns`, `netns`, `numa`, `oom`, `oomadj`, `ouid`, `pcap`, `pcaps`, `pidns`, `seat`, `slice`, `timens`, `unit`, `userns`, `utsns`, `uunit`, `htprv`, `htshr`, `eip`, `esp`, `stackp`, `psr`, `cpu`, `cpuid`, `lastcpu`, `sgi_p`, `wchan`, `nwchan`, `rchars`, `wchars`, `rops`, `wops`, `wcbytes`                                                                          |

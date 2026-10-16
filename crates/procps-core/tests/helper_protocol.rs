@@ -440,6 +440,7 @@ fn fixed_process() -> Process {
         })),
         regions: Some(Field::Available(fixed_regions())),
         file_descriptors: Some(Field::Failed),
+        file_descriptor_count: Some(Field::Available(16)),
         working_directory: Some(Field::Available(PathBuf::from("/"))),
         ..Process::from_identity(
             fixed_info(400, Status::Running),
@@ -534,7 +535,7 @@ fn hex<M: Message>(message: &M) -> String {
 
 /// The frame of [`fixed_response`] in the current version of the protocol.
 const RESPONSE: &str = concat!(
-    "0005000003f900e4f7c4d50600640006a00602a206018480808002a406f50300",
+    "00060000040100e4f7c4d50600640006a00602a206018480808002a406f50300",
     "f60314151602170cfb1f01848001030180f7c4d506a0c21e00076c61756e6368",
     "640180800100000d2f7362696e2f6c61756e6368640201000100076c61756e63",
     "686401010100808080808020808080080180cab5ee010080e59a770001020304",
@@ -553,36 +554,37 @@ const RESPONSE: &str = concat!(
     "8080608080010507050180608040802080108008800402014d00018080808070",
     "8080010507060180608040802080108008800402014d00018080808080018080",
     "010507070180608040802080108008800402014d000180808080900180800105",
-    "0708630180608040802080108008800402014d00010103010000012fe80702ea",
-    "07018480808002ec07f50300f60314151602170cfb1f00848001030180f7c4d5",
-    "06a0c21e00076c61756e6368640180800101030000000000000000fc0702fe07",
-    "0184808080028008f50300f60314151602170cfb1f02848001030180f7c4d506",
-    "a0c21e00076c61756e6368640180800101030000000000000000900802920801",
-    "84808080029408f50300f60314151602170cfb1f03848001030180f7c4d506a0",
-    "c21e00076c61756e6368640180800101030000000000000000a40802a6080184",
-    "80808002a808f50300f60314151602170cfb1f04848001030180f7c4d506a0c2",
-    "1e00076c61756e6368640180800101030000000000000000b80802ba08018480",
-    "808002bc08f50300f60314151602170cfb1f05ff848001030180f7c4d506a0c2",
-    "1e00076c61756e63686401808001010300000000000000000180f7c4d5060000",
-    "0000000000f83f000000000000f43f000000000000f03f808080804001020304",
-    "05060708090a0b80808080048080408080c0ff03010101020300d804b81702",
+    "0708630180608040802080108008800402014d00010103010010010000012fe8",
+    "0702ea07018480808002ec07f50300f60314151602170cfb1f00848001030180",
+    "f7c4d506a0c21e00076c61756e636864018080010103000000000000000000fc",
+    "0702fe070184808080028008f50300f60314151602170cfb1f02848001030180",
+    "f7c4d506a0c21e00076c61756e63686401808001010300000000000000000090",
+    "080292080184808080029408f50300f60314151602170cfb1f03848001030180",
+    "f7c4d506a0c21e00076c61756e636864018080010103000000000000000000a4",
+    "0802a608018480808002a808f50300f60314151602170cfb1f04848001030180",
+    "f7c4d506a0c21e00076c61756e636864018080010103000000000000000000b8",
+    "0802ba08018480808002bc08f50300f60314151602170cfb1f05ff8480010301",
+    "80f7c4d506a0c21e00076c61756e636864018080010103000000000000000000",
+    "0180f7c4d50600000000000000f83f000000000000f43f000000000000f03f80",
+    "808080400102030405060708090a0b80808080048080408080c0ff0301010102",
+    "0300d804b81702",
 );
 
 #[rstest]
-#[case::request_for_identities(hex(&Request::Snapshot(SnapshotRequest::default())), "00050000000400000000")]
-#[case::request_for_everything(hex(&request_for_everything()), "000500000010000700010203040506010202be9a0c01")]
+#[case::request_for_identities(hex(&Request::Snapshot(SnapshotRequest::default())), "00060000000400000000")]
+#[case::request_for_everything(hex(&request_for_everything()), "000600000010000700010203040506010202be9a0c01")]
 #[case::response(hex(&fixed_response()), RESPONSE)]
-#[case::version_refusal(hex(&Response::Refused(Refusal::Version)), "0005000000020100")]
-#[case::request_too_large_refusal(hex(&Response::Refused(Refusal::RequestTooLarge)), "0005000000020101")]
-#[case::malformed_refusal(hex(&Response::Refused(Refusal::Malformed)), "0005000000020102")]
-#[case::failed_refusal(hex(&Response::Refused(Refusal::Failed)), "0005000000020103")]
-#[case::timed_out_refusal(hex(&Response::Refused(Refusal::TimedOut)), "0005000000020104")]
-#[case::response_too_large_refusal(hex(&Response::Refused(Refusal::ResponseTooLarge)), "0005000000020105")]
-#[case::busy_refusal(hex(&Response::Refused(Refusal::Busy)), "0005000000020106")]
+#[case::version_refusal(hex(&Response::Refused(Refusal::Version)), "0006000000020100")]
+#[case::request_too_large_refusal(hex(&Response::Refused(Refusal::RequestTooLarge)), "0006000000020101")]
+#[case::malformed_refusal(hex(&Response::Refused(Refusal::Malformed)), "0006000000020102")]
+#[case::failed_refusal(hex(&Response::Refused(Refusal::Failed)), "0006000000020103")]
+#[case::timed_out_refusal(hex(&Response::Refused(Refusal::TimedOut)), "0006000000020104")]
+#[case::response_too_large_refusal(hex(&Response::Refused(Refusal::ResponseTooLarge)), "0006000000020105")]
+#[case::busy_refusal(hex(&Response::Refused(Refusal::Busy)), "0006000000020106")]
 fn the_encoding_matches_the_protocol_version(#[case] frame: String, #[case] expected: &str) {
     assert_eq!(
         (VERSION, frame.as_str()),
-        (5, expected),
+        (6, expected),
         "the encoding has changed: increase VERSION and replace the expected frames"
     );
 }

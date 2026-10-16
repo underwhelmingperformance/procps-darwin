@@ -223,7 +223,7 @@ impl LocalSource {
         }
 
         if request.wants(FieldGroup::FileDescriptors) {
-            process.file_descriptors = Some(field(pid, pid.file_descriptors())?);
+            process = process.with_file_descriptors(field(pid, pid.file_descriptors())?);
         }
 
         if request.wants(FieldGroup::WorkingDirectory) {
