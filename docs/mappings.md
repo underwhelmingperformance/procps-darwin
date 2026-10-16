@@ -370,6 +370,23 @@ effective IDs. Darwin has no such IDs, so `fuid`, `fuser`, `fgid`, `fgroup`,
 `fsuid`, `fsuser`, `fsgid` and `fsgroup` show the effective IDs from
 `kinfo_proc`.
 
+## Stack and instruction pointers
+
+`ps`'s `X` format shows `stackp`, `esp` and `eip`. Linux reports the stack
+pointer and the instruction pointer in `/proc/<pid>/stat` only for a task that
+is exiting or dumping core, and 0 for every other task. `ps` does not read live
+registers, and shows 0 in procps-ng's 16 hexadecimal digits in `esp` and `eip`
+for every process, as Linux does except while a task exits or dumps core.
+
+`stackp` is the start of the main thread's stack. Linux reports it as 0 to a
+caller that fails ptrace's read-access check, and for a process without memory,
+such as a zombie. `ps` shows 0 in those cases. Darwin does not report the start
+of the main thread's stack: `PROC_PIDREGIONINFO` marks each stack region with
+`VM_MEMORY_STACK`, but it does not tell the main thread's stack from the stacks
+of other threads. `stackp` therefore shows `-` for a process that `ps` may read
+and that has memory. Linux's start of such a stack is an address above 0, so
+`--sort stackp` puts these processes after the zeros, as procps-ng does.
+
 ## Signal masks
 
 `ps`'s `caught` and `ignored` columns show `p_sigcatch` and `p_sigignore` from

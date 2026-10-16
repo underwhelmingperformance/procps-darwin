@@ -614,7 +614,7 @@ mod tests {
     )]
     #[case::bsd_registers_format(
         &["X", "-p", "50"],
-        "  PID           STACKP              ESP              EIP TMOUT ALARM STAT TTY        TIME COMMAND\n   50                -                -                -     -     - Ss   console    0:02 zsh\n"
+        "  PID           STACKP              ESP              EIP TMOUT ALARM STAT TTY        TIME COMMAND\n   50                - 0000000000000000 0000000000000000     -     - Ss   console    0:02 zsh\n"
     )]
     #[case::bsd_long_format(
         &["l", "-p", "50"],

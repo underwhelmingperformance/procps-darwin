@@ -757,6 +757,8 @@ impl Printer {
                 number_cell(counters(process).map(|counters| counters.disk_bytes_written))
             }
             Self::Fds => number_cell(open_files(process)),
+            Self::Esp | Self::Eip => Cell::text(address(Some(0))),
+            Self::Stackp => Cell::text(address(stack_start(context, process))),
             Self::Exe => {
                 let executable = executable(context, process);
 
@@ -927,10 +929,9 @@ impl Printer {
             // containers, security labels, capabilities, autogroups, the OOM
             // killer, NUMA nodes, huge pages, the processor, the wait
             // channel, the login user ID, and I/O counts that Darwin does not
-            // keep. macOS has pending and blocked signals, resource limits, and
-            // each thread's registers and stack, but `kinfo_proc` reports no
-            // pending or blocked signals, no call reads another process's
-            // limits, and `ps` does not read the registers.
+            // keep. macOS has pending and blocked signals and resource limits,
+            // but `kinfo_proc` reports no pending or blocked signals, and no
+            // call reads another process's limits.
             Self::Agid
             | Self::Agnice
             | Self::Cgname
@@ -938,8 +939,6 @@ impl Printer {
             | Self::Cgroupns
             | Self::Context
             | Self::Docker
-            | Self::Eip
-            | Self::Esp
             | Self::Hugetblprv
             | Self::Hugetblshr
             | Self::Ipcns
@@ -968,7 +967,6 @@ impl Printer {
             | Self::SdUunit
             | Self::Sig
             | Self::Sigmask
-            | Self::Stackp
             | Self::Timens
             | Self::Tsig
             | Self::Userns
@@ -1068,6 +1066,23 @@ pub(crate) fn unique_size(process: &Process) -> Option<u64> {
         .unique
         .and_then(|size| size.available().copied())
         .map(|size| size >> 10)
+}
+
+/// The start of the stack of `process` (`ADDR_STACK_START`), as far as `ps`
+/// knows it. Linux reports 0 to a caller that may not read the process's
+/// private values and for a process without memory. Darwin does not report
+/// the start of the main thread's stack, so it is unknown otherwise.
+pub(crate) fn stack_start(context: &Context<'_>, process: &Process) -> Option<u64> {
+    (!context.caller.may_read_private(&process.info) || has_no_memory(process)).then_some(0)
+}
+
+/// `address` as procps-ng prints an address: 16 hexadecimal digits, or `-`
+/// if it is unknown.
+fn address(address: Option<u64>) -> Vec<u8> {
+    address.map_or_else(
+        || b"-".to_vec(),
+        |address| format!("{address:016x}").into_bytes(),
+    )
 }
 
 /// The number of open file descriptors of `process` (`OPEN_FILES`). A zombie
@@ -1935,6 +1950,46 @@ pub(crate) mod tests {
             .collect();
 
         assert_eq!(printed, ["-", "-", "4", "-", "-", "-"]);
+    }
+
+    // Linux reports the stack pointer and the instruction pointer only for a
+    // task that is exiting or dumping core, and 0 otherwise. It reports the
+    // start of the stack only to a caller that passes ptrace's read-access
+    // check, and 0 for a process without memory.
+    #[rstest]
+    #[case::reader(owned_by(501, 20), ["-", "0000000000000000", "0000000000000000"])]
+    #[case::other_user(owned_by(502, 20), ZEROS)]
+    #[case::zombie(zombie_of(owned_by(501, 20)), ZEROS)]
+    fn the_address_columns_show_what_linux_shows(
+        #[case] process: Process,
+        #[case] expected: [&str; 3],
+    ) {
+        let settings = Settings {
+            caller: Caller::new(Uid::from(501), Gid::from(20)),
+            ..settings(Modifiers::empty())
+        };
+        let printed = ["stackp", "esp", "eip"].map(|name| {
+            let cell = printed(name, process.clone(), 1_000, settings.clone());
+
+            String::from_utf8(cell.bytes).expect("the text is UTF-8")
+        });
+
+        assert_eq!(printed, expected);
+    }
+
+    /// The address columns of a process whose addresses Linux reports as 0.
+    const ZEROS: [&str; 3] = ["0000000000000000"; 3];
+
+    /// `process` as a zombie, without task information.
+    fn zombie_of(mut process: Process) -> Process {
+        process.info.status = Status::Zombie;
+        process.usage = Some(Usage {
+            task: Field::Unsupported,
+            resources: Field::Available(resources()),
+            counters: Field::Unsupported,
+        });
+
+        process
     }
 
     #[rstest]
