@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--signames makes a signal mask column at least 27 cells wide"
+command = ["ps", "--signames", "-o", "caught,pid", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+catch = ["SIGHUP", "SIGTERM"]

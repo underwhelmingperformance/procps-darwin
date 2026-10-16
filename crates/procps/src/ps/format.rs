@@ -16,7 +16,7 @@ use crate::{
         error::{InternalError, SyntaxError, Warning},
         options::{FormatFlags, FormatModifiers, ThreadFlags},
         personality::{self, Personality},
-        specifier::{self, Specifier},
+        specifier::{self, Justification, Specifier},
     },
 };
 
@@ -39,6 +39,16 @@ pub(crate) struct Column {
     pub(crate) header: Vec<u8>,
     /// The width.
     pub(crate) width: usize,
+}
+
+impl Column {
+    /// Whether the column shows a signal mask (`CF_SIGNAL`).
+    pub(crate) fn shows_signal_mask(&self) -> bool {
+        matches!(
+            self.content,
+            Content::Specifier(specifier) if specifier.justification == Justification::Signal
+        )
+    }
 }
 
 /// The order of a sort key.

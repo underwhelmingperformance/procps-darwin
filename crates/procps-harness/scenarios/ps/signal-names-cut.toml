@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--signames ends a list of names that does not fit with +"
+command = ["ps", "--signames", "-o", "caught,pid", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"
+catch = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGALRM", "SIGTERM"]

@@ -1,0 +1,9 @@
+status = 0
+stdout = """
+CAUGHT                        PID
+HUP,INT,QUIT,BUS,SEGV,ALRM+ {a1}
+"""
+stderr = ""
+
+[fixtures]
+a1 = "running"

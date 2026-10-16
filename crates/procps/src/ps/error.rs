@@ -341,6 +341,13 @@ pub(crate) enum InternalError {
     /// `-c` with a format that has no `PRI` column.
     #[error("internal error: no PRI for -c option")]
     NoPriForC,
+    /// `--signames`, BSD's `m` or UNIX's `-m`, and a signal mask column.
+    /// procps-ng's `check_header_width` replaces the column's flags with
+    /// `CF_UNLIMITED` for `--signames`, which removes the flags that say
+    /// whether a process's row or a thread's row shows the column, and
+    /// `lists_and_needs` then reports a bug.
+    #[error("please report this bug")]
+    SignalNamesWithThreadRows,
 }
 
 impl InternalError {
@@ -349,16 +356,9 @@ impl InternalError {
         match self {
             Self::NoPidForJ => "src/ps/sortformat.c:902",
             Self::NoPriForC => "src/ps/sortformat.c:917",
+            Self::SignalNamesWithThreadRows => "src/ps/display.c:252",
         }
     }
-}
-
-/// A part of `ps` that this project does not implement yet.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum Unimplemented {
-    /// An option that changes how columns show their values (task 5.6).
-    #[error("the option {0} is not implemented yet")]
-    Option(&'static str),
 }
 
 /// The exit status of every error, as in procps-ng.
@@ -379,10 +379,6 @@ pub(crate) enum PsError {
     /// `argv[0]` and its source position.
     #[error(transparent)]
     Internal(#[from] InternalError),
-    /// The command line needs a part of `ps` that this project does not
-    /// implement yet.
-    #[error(transparent)]
-    Unimplemented(Unimplemented),
     /// `PROCPS_DARWIN_SOURCE` is set to a value that is not a source.
     #[error(transparent)]
     Choice(#[from] procps_core::ChoiceError),
@@ -427,13 +423,6 @@ impl PsError {
                 error.position().as_bytes(),
                 b": ",
                 error.to_string().as_bytes(),
-                b"\n",
-            ]
-            .concat(),
-            Self::Unimplemented(_) => [
-                program.as_bytes(),
-                b": ",
-                self.to_string().as_bytes(),
                 b"\n",
             ]
             .concat(),
@@ -498,7 +487,7 @@ mod tests {
     use procps_core::SourceError;
     use rstest::rstest;
 
-    use super::{InternalError, PsError, QuickPidConflict, SyntaxError, Unimplemented};
+    use super::{InternalError, PsError, QuickPidConflict, SyntaxError};
     use crate::{
         output::WriteFailure,
         ps::help::{Section, usage},
@@ -557,10 +546,6 @@ mod tests {
     )]
     #[case::earlier_write(PsError::Write(WriteFailure::Stdout(None)), &b"ps: write error\n"[..])]
     #[case::stderr(PsError::Write(WriteFailure::Stderr), &b""[..])]
-    #[case::unimplemented(
-        PsError::Unimplemented(Unimplemented::Option("S")),
-        &b"ps: the option S is not implemented yet\n"[..]
-    )]
     #[case::source(
         PsError::Source { quick: false, sorted: false, error: SourceError::TimedOut },
         &b"ps: Fatal library error, unable to reap pids: the snapshot reached its time limit\n"[..]
