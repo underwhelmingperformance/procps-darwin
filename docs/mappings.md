@@ -345,7 +345,9 @@ Linux reports the CPU time of the children that a process has waited for as
 `cutime` and `cstime` in `/proc/<pid>/stat`. procps-ng's `cuc` column adds them
 to the process's own `utime` and `stime`, and shows the sum as a percentage of
 the time since the process started. Its `cutime` sort key adds only the user
-times, `utime` and `cutime`. The tools use `ri_child_user_time` and
+times, `utime` and `cutime`. With BSD's `S` or `--cumulative`, the `bsdtime`,
+`%cpu`, `c` and `cp` columns add them too, whereas `time` and `cputime` keep the
+process's own time. The tools use `ri_child_user_time` and
 `ri_child_system_time` from `proc_pid_rusage`. Darwin adds a child's times when
 the child is reaped. Linux does so only when the parent waits for the child,
 whereas Darwin also adds the times of a child that is reaped automatically
@@ -393,6 +395,12 @@ approximate the minor faults:
 | ----------------------------- | ------------------ | ------------------------------------------------------------------ |
 | `maj_flt`, `majflt`, `pagein` | `majflt` in `stat` | `pti_pageins`, or `ri_pageins` from `proc_pid_rusage` for a zombie |
 | `min_flt`, `minflt`           | `minflt` in `stat` | `pti_faults` minus `pti_pageins`, or `-` for a zombie              |
+
+With BSD's `S` or `--cumulative`, procps-ng adds the faults of the children that
+the process has waited for, `cmajflt` and `cminflt` in `stat`. The tools add
+`ri_child_pageins` from `proc_pid_rusage` to `maj_flt`. `proc_pid_rusage` does
+not report the other faults of a process's children, so `min_flt` shows `-` with
+these options.
 
 ## Filesystem IDs
 

@@ -49,10 +49,7 @@ pub(crate) struct Invocation {
 
 /// The first part of `options` that this project does not implement yet.
 fn unimplemented(options: &Options) -> Option<Unimplemented> {
-    let modifiers = [
-        (Modifiers::CUMULATIVE, "S"),
-        (Modifiers::SIGNAL_NAMES, "--signames"),
-    ];
+    let modifiers = [(Modifiers::SIGNAL_NAMES, "--signames")];
 
     if let Some(&(_, option)) = modifiers
         .iter()
@@ -512,7 +509,8 @@ mod tests {
 
     use assert_matches::assert_matches;
     use darwin_proc::{
-        CalendarTime, Gid, Pid, RunState, SchedulingPolicy, Status, Terminal, ThreadInfo, Uid,
+        CalendarTime, Gid, Pid, ResourceUsage, RunState, SchedulingPolicy, Status, Terminal,
+        ThreadInfo, Uid,
     };
     use pretty_assertions::assert_eq;
     use procps_core::{
@@ -1021,6 +1019,36 @@ mod tests {
         );
     }
 
+    // Linux reports the CPU time of a process's reaped children in the `stat`
+    // file of each of its threads, so `S` adds it to every thread's row.
+    #[test]
+    fn a_thread_s_cumulative_time_adds_its_process_s_children() {
+        let mut processes = threaded_fixtures();
+        let worker = processes
+            .last_mut()
+            .expect("the worker is the last fixture");
+        worker.usage = Some(Usage {
+            task: Field::Available(task()),
+            resources: Field::Available(ResourceUsage {
+                children_user_time: Duration::from_secs(3),
+                ..resources()
+            }),
+            counters: Field::Unsupported,
+        });
+
+        let (stdout, stderr, result) =
+            listed_from(&["-L", "S", "-o", "lwp,bsdtime", "-p", "400"], processes);
+
+        assert_eq!(
+            (stdout.as_str(), stderr.as_str(), result.ok()),
+            (
+                "  LWP   TIME\n  401   0:04\n  402   0:05\n  403   0:03\n",
+                "",
+                Some(true)
+            )
+        );
+    }
+
     #[rstest]
     #[case::unix_threads(&["-L", "-o", "pid"])]
     #[case::bsd_threads(&["H", "-o", "pid"])]
@@ -1125,7 +1153,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::cumulative(&["S"], Unimplemented::Option("S"))]
     #[case::signal_names(&["--signames"], Unimplemented::Option("--signames"))]
     fn a_part_that_is_not_implemented_yet_is_an_error(
         #[case] line: &[&str],

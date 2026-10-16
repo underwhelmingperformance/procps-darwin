@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Iain Lane <iain@orangesquash.org.uk>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+description = "--cumulative adds the CPU time of reaped children to the CPU columns"
+command = ["ps", "--cumulative", "-o", "pid,bsdtime,c,cp,%cpu", "-p", "{a1}"]
+
+[[fixture]]
+name = "a1"
+comm = "harness-alpha"

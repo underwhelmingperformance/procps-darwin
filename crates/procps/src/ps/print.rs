@@ -777,10 +777,10 @@ impl Printer {
                 Cell::text(format!("{days_text}{hours_text}{minutes:02}:{seconds:02}"))
             }
             Self::Etimes => Cell::text(whole(elapsed(context, process)).to_string()),
-            Self::C => utilization_cell(utilization(context, task), |utilization| {
+            Self::C => utilization_cell(cumulative_utilization(context, task), |utilization| {
                 format!("{:2}", whole(utilization).min(99))
             }),
-            Self::Pcpu => utilization_cell(utilization(context, task), |utilization| {
+            Self::Pcpu => utilization_cell(cumulative_utilization(context, task), |utilization| {
                 let tenths = whole(utilization * 10.0);
 
                 if tenths > 999 {
@@ -789,7 +789,7 @@ impl Printer {
                     format!("{}.{}", tenths / 10, tenths % 10)
                 }
             }),
-            Self::Cp => utilization_cell(utilization(context, task), |utilization| {
+            Self::Cp => utilization_cell(cumulative_utilization(context, task), |utilization| {
                 format!("{:3}", whole(utilization * 10.0).min(999))
             }),
             Self::Utilization => utilization_cell(utilization(context, task), lifetime_percentage),
@@ -810,7 +810,7 @@ impl Printer {
                 format!("{days}{hours:02}:{minutes:02}:{seconds:02}")
             }),
             Self::Times => cpu_cell(task, |seconds| whole(seconds).to_string()),
-            Self::Bsdtime => cpu_ticks(task).map_or_else(Cell::dash, |ticks| {
+            Self::Bsdtime => cumulative_ticks(context, task).map_or_else(Cell::dash, |ticks| {
                 let seconds = ticks / Clock::HERTZ;
 
                 Cell::text(format!("{:3}:{:02}", seconds / 60, seconds % 60))
@@ -889,8 +889,8 @@ impl Printer {
                 .data_and_stack
                 .and_then(|size| size.available().copied())
                 .map_or_else(Cell::dash, |size| Cell::text((size / 1024).to_string())),
-            Self::Majflt => number_cell(major_faults(task)),
-            Self::Minflt => number_cell(minor_faults(task)),
+            Self::Majflt => number_cell(cumulative_major_faults(context, task)),
+            Self::Minflt => number_cell(cumulative_minor_faults(context, task)),
             Self::Priority => priority_cell(task, |priority| priority),
             Self::Opri => priority_cell(task, |priority| 60 + priority),
             Self::PriFoo => priority_cell(task, |priority| priority - 20),
@@ -1148,6 +1148,50 @@ impl Line {
         self.bytes.extend(escaped.bytes);
         self.rightward -= escaped.cells;
     }
+}
+
+/// The CPU use of `task` as `%cpu`, `c` and `cp` show it. With BSD's `S` or
+/// `--cumulative`, it includes the CPU time of the reaped children of the
+/// task's process.
+fn cumulative_utilization(context: &Context<'_>, task: &LinuxTask<'_>) -> Option<f64> {
+    if context.modifiers.contains(Modifiers::CUMULATIVE) {
+        return utilization_with_children(context, task);
+    }
+
+    utilization(context, task)
+}
+
+/// The CPU time of `task` in clock ticks as `bsdtime` shows it, with the CPU
+/// time of the reaped children of the task's process for `S`.
+fn cumulative_ticks(context: &Context<'_>, task: &LinuxTask<'_>) -> Option<u64> {
+    if context.modifiers.contains(Modifiers::CUMULATIVE) {
+        return cpu_ticks_with_children(task);
+    }
+
+    cpu_ticks(task)
+}
+
+/// The major faults of `task` as `maj_flt` shows them, with the page-ins of
+/// the reaped children of the task's process for `S` (`FLT_MAJ_C`).
+fn cumulative_major_faults(context: &Context<'_>, task: &LinuxTask<'_>) -> Option<u64> {
+    let faults = major_faults(task)?;
+
+    if context.modifiers.contains(Modifiers::CUMULATIVE) {
+        return Some(faults + resources(task.process())?.children_pageins);
+    }
+
+    Some(faults)
+}
+
+/// The minor faults of `task` as `min_flt` shows them. For `S`, Linux adds
+/// the minor faults of the reaped children (`FLT_MIN_C`).
+/// `proc_pid_rusage` does not report them, so the value is unknown.
+fn cumulative_minor_faults(context: &Context<'_>, task: &LinuxTask<'_>) -> Option<u64> {
+    if context.modifiers.contains(Modifiers::CUMULATIVE) {
+        return None;
+    }
+
+    minor_faults(task)
 }
 
 /// `utilization`, formatted by `format`, or `-`.
@@ -2013,6 +2057,7 @@ pub(crate) mod tests {
             resources: Field::Available(ResourceUsage {
                 children_user_time: Duration::from_secs(4),
                 children_system_time: Duration::from_secs(2),
+                children_pageins: 5,
                 ..resources()
             }),
             counters: Field::Available(ResourceCounters {
@@ -2441,6 +2486,27 @@ pub(crate) mod tests {
                 "20".to_owned()
             )
         );
+    }
+
+    // procps-ng's `include_dead_children` changes only these columns, so
+    // `time` keeps the process's own time.
+    #[rstest]
+    #[case::bsdtime("bsdtime", "  0:08")]
+    #[case::pcpu("%cpu", "8.0")]
+    #[case::c("c", " 8")]
+    #[case::cp("cp", " 80")]
+    #[case::major_faults("maj_flt", "15")]
+    #[case::minor_faults("min_flt", "-")]
+    #[case::time("time", "00:00:02")]
+    fn cumulative_columns_add_the_reaped_children(#[case] name: &str, #[case] expected: &str) {
+        let cell = printed(
+            name,
+            with_private_values(),
+            1_000,
+            settings(Modifiers::CUMULATIVE),
+        );
+
+        assert_eq!(String::from_utf8(cell.bytes), Ok(expected.to_owned()));
     }
 
     // procps-ng appends the environment only when the column has more than
